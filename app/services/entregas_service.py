@@ -222,7 +222,6 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     )
 
     # Crear conversación y guardar en DB
-    logger.info(f"Creando nueva conversación para entrega {entrega_id}")
     conversacion = ConversacionEncuesta(
         entrega_id=entrega_id,
         pregunta_actual_id=primera_pregunta.id,
