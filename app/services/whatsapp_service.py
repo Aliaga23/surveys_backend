@@ -12,16 +12,15 @@ async def enviar_mensaje_whatsapp(
     opciones: Optional[List[str]] = None
 ):
     """
-    Envía un mensaje usando Whapi API con opciones si existen
+    Envía un mensaje usando gate.whapi.cloud con opciones si existen
     """
-    # Asegurar formato correcto del chat_id (añadir @c.us si no está)
-    if "@c.us" not in chat_id:
-        chat_id = f"{chat_id}@c.us"
-    
+   
     # Formatear el mensaje con las opciones si existen
     mensaje_completo = mensaje
     if opciones and len(opciones) > 0:
         mensaje_completo += "\n\nOpciones disponibles:\n" + "\n".join(f"• {opcion}" for opcion in opciones)
+    
+    print(f"Enviando mensaje a {chat_id}: {mensaje_completo[:30]}...")
     
     async with httpx.AsyncClient() as client:
         try:
@@ -32,24 +31,20 @@ async def enviar_mensaje_whatsapp(
                     "Content-Type": "application/json"
                 },
                 json={
-                    "to": chat_id,  # Usar chatId según la documentación de Whapi
-                    "body": mensaje_completo  # Usar body según la documentación de Whapi
+                    "to": chat_id,  # Según documentación de Whapi
+                    "body": mensaje_completo  # Según documentación de Whapi
                 },
                 timeout=10.0
             )
             
             # Log para depuración
-            logger.debug(f"Respuesta de Whapi: Status {response.status_code}")
+            print(f"Respuesta de Whapi - Status: {response.status_code}")
+            if response.status_code != 200:
+                print(f"Error en respuesta: {response.text}")
             
             response.raise_for_status()
             return response.json()
             
-        except httpx.HTTPError as e:
-            error_msg = f"Error enviando mensaje WhatsApp: {str(e)}"
-            logger.error(error_msg)
-            if hasattr(e, 'response') and e.response:
-                logger.error(f"Response content: {e.response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_msg
-            )
+        except Exception as e:
+            print(f"Error enviando mensaje: {str(e)}")
+            raise e
