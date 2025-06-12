@@ -292,7 +292,6 @@ async def create_entrega(
             conversaciones_estado[numero] = 'esperando_confirmacion'
             
         except Exception as e:
-            logger.error(f"Error iniciando conversación WhatsApp: {str(e)}")
             entrega.estado_id = ESTADO_FALLIDO
             db.commit()
             raise HTTPException(
