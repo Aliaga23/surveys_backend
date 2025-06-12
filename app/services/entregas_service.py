@@ -161,7 +161,43 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
 
-    # Obtener la primera pregunta de la plantilla
+    # Verificar si ya existe una conversación para esta entrega
+    conversacion_existente = (
+        db.query(ConversacionEncuesta)
+        .filter(ConversacionEncuesta.entrega_id == entrega_id)
+        .first()
+    )
+    
+    if conversacion_existente:
+        # Si ya existe una conversación, obtener la pregunta actual
+        pregunta_actual = (
+            db.query(PreguntaEncuesta)
+            .filter(PreguntaEncuesta.id == conversacion_existente.pregunta_actual_id)
+            .first()
+        )
+        
+        # Generar nuevamente la pregunta
+        texto_pregunta = await generar_siguiente_pregunta(
+            conversacion_existente.historial,
+            pregunta_actual.texto,
+            pregunta_actual.tipo_pregunta_id
+        )
+        
+        # Determinar opciones
+        opciones = None
+        if pregunta_actual.tipo_pregunta_id in [3, 4]:
+            opciones = [opcion.texto for opcion in pregunta_actual.opciones]
+        
+        # Enviar la pregunta actual
+        await enviar_mensaje_whatsapp(
+            entrega.destinatario.telefono,
+            texto_pregunta,
+            opciones
+        )
+        
+        return conversacion_existente
+    
+    # Si no existe conversación, crear una nueva
     primera_pregunta = (
         db.query(PreguntaEncuesta)
         .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
@@ -172,14 +208,15 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     if not primera_pregunta:
         raise ValueError("La plantilla no tiene preguntas")
 
-    # Generar texto de la primera pregunta
+    # Generar texto de la primera pregunta de forma amigable
     texto_inicial = await generar_siguiente_pregunta(
-        [],
+        [],  # Historial vacío al inicio
         primera_pregunta.texto,
         primera_pregunta.tipo_pregunta_id
     )
 
-    # Crear conversación
+    # Crear conversación y guardar en DB
+    logger.info(f"Creando nueva conversación para entrega {entrega_id}")
     conversacion = ConversacionEncuesta(
         entrega_id=entrega_id,
         pregunta_actual_id=primera_pregunta.id,
@@ -196,16 +233,17 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     
     # Determinar si hay opciones para presentar
     opciones = None
-    if primera_pregunta.tipo_pregunta_id in [3, 4]:  # Select o Multiselect
+    if primera_pregunta.tipo_pregunta_id in [3, 4]:
         opciones = [opcion.texto for opcion in primera_pregunta.opciones]
     
-    # Enviar primer mensaje con opciones si existen
+    # Enviar primera pregunta
     await enviar_mensaje_whatsapp(
         entrega.destinatario.telefono, 
         texto_inicial,
         opciones
     )
     
+    logger.info(f"Primera pregunta enviada a {entrega.destinatario.telefono}")
     return conversacion
 
 async def create_entrega(

@@ -7,7 +7,6 @@ from app.core.database import get_db
 from app.services.conversacion_service import procesar_respuesta
 from app.services.entregas_service import get_entrega_by_destinatario, iniciar_conversacion_whatsapp
 from app.services.whatsapp_service import enviar_mensaje_whatsapp
-from app.services.respuestas_service import crear_respuesta_encuesta
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +14,7 @@ router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
 # Estado de la conversación por usuario
 # {numero_telefono: estado}
-# Posibles estados: 'inicio', 'esperando_confirmacion', 'encuesta_en_progreso'
+# Posibles estados: 'esperando_confirmacion', 'encuesta_en_progreso'
 conversaciones_estado = {}
 
 @router.post("/webhook")
@@ -24,7 +23,7 @@ async def whatsapp_webhook(
     db: Session = Depends(get_db)
 ):
     """
-    Webhook para recibir mensajes de gate.whapi.cloud con flujo conversacional mejorado
+    Webhook para recibir mensajes de gate.whapi.cloud
     """
     try:
         # Validar que sea un mensaje de texto
@@ -40,8 +39,8 @@ async def whatsapp_webhook(
         
         logger.info(f"Mensaje recibido de {numero}: {texto}")
         
-        # Obtener estado actual de la conversación o establecer 'inicio' por defecto
-        estado_actual = conversaciones_estado.get(numero, 'inicio')
+        # Obtener estado actual de la conversación
+        estado_actual = conversaciones_estado.get(numero, 'esperando_confirmacion')
         
         # Buscar entrega por número de teléfono
         entrega = get_entrega_by_destinatario(db, telefono=numero)
@@ -52,30 +51,26 @@ async def whatsapp_webhook(
             )
             return {"success": True}
         
-        # Estado inicial de la conversación
-        if estado_actual == 'inicio':
-            # Enviar saludo y pregunta de confirmación
-            nombre = entrega.destinatario.nombre or "estimado/a"
-            mensaje_saludo = (
-                f"¡Hola {nombre}! 👋\n\n"
-                f"Soy el asistente virtual de {entrega.campana.nombre}. "
-                f"Tenemos una encuesta breve que nos gustaría que completes.\n\n"
-                f"¿Te gustaría empezar ahora? Responde 'SI' para comenzar o 'NO' para hacerlo más tarde."
-            )
-            await enviar_mensaje_whatsapp(chat_id, mensaje_saludo)
-            conversaciones_estado[numero] = 'esperando_confirmacion'
-            return {"success": True}
-        
         # Si está esperando confirmación para iniciar la encuesta
-        elif estado_actual == 'esperando_confirmacion':
+        if estado_actual == 'esperando_confirmacion':
             respuesta_normalizada = texto.strip().lower()
             
             # Si confirma iniciar la encuesta
             if re.match(r'(s[iíì]|yes|ok|okay|vale|claro|por supuesto|adelante)', respuesta_normalizada):
-                # Iniciar la conversación de la encuesta
-                await iniciar_conversacion_whatsapp(db, entrega.id)
-                conversaciones_estado[numero] = 'encuesta_en_progreso'
-                return {"success": True}
+                try:
+                    # Iniciar la conversación de la encuesta
+                    await iniciar_conversacion_whatsapp(db, entrega.id)
+                    
+                    # Actualizar el estado
+                    conversaciones_estado[numero] = 'encuesta_en_progreso'
+                    return {"success": True}
+                except Exception as e:
+                    logger.error(f"Error iniciando encuesta: {str(e)}")
+                    await enviar_mensaje_whatsapp(
+                        chat_id,
+                        "Lo siento, ocurrió un error al iniciar la encuesta. Por favor intenta nuevamente en unos minutos."
+                    )
+                    return {"success": False, "error": str(e)}
             
             # Si no quiere iniciar ahora
             elif re.match(r'(no|nop|después|luego|más tarde)', respuesta_normalizada):
@@ -94,7 +89,6 @@ async def whatsapp_webhook(
             if not entrega.conversacion:
                 # Si por alguna razón no existe la conversación, reiniciar
                 await iniciar_conversacion_whatsapp(db, entrega.id)
-                conversaciones_estado[numero] = 'encuesta_en_progreso'
                 return {"success": True}
             
             # Procesar la respuesta normalmente
@@ -113,20 +107,22 @@ async def whatsapp_webhook(
                 if resultado.get("completada", False):
                     await enviar_mensaje_whatsapp(
                         chat_id,
-                        "¡Muchas gracias por completar la encuesta! Tus respuestas son muy valiosas para nosotros. "
-                        "Si necesitas alguna otra cosa, no dudes en contactarnos."
+                        "¡Muchas gracias por completar la encuesta! Tus respuestas son muy valiosas para nosotros."
                     )
                     # Restablecer estado
-                    conversaciones_estado[numero] = 'inicio'
+                    if numero in conversaciones_estado:
+                        del conversaciones_estado[numero]
             
             return {"success": True}
         
-        # Estado desconocido, reiniciar conversación
+        # Estado desconocido
         else:
-            conversaciones_estado[numero] = 'inicio'
-            nombre = entrega.destinatario.nombre or "estimado/a"
-            mensaje = f"Hola {nombre}, ¿en qué puedo ayudarte hoy? Puedes escribir 'INICIAR' si deseas comenzar la encuesta."
-            await enviar_mensaje_whatsapp(chat_id, mensaje)
+            # Mensaje genérico para reanudar
+            await enviar_mensaje_whatsapp(
+                chat_id,
+                "Hola de nuevo. Para iniciar o continuar con la encuesta, por favor escribe 'INICIAR'."
+            )
+            conversaciones_estado[numero] = 'esperando_confirmacion'
             return {"success": True}
         
     except Exception as e:
@@ -142,7 +138,7 @@ async def whatsapp_webhook(
             pass
         return {"success": False, "error": str(e)}
 
-# Ruta adicional para gestión y pruebas
+# Endpoint adicional para reiniciar conversaciones
 @router.post("/reset/{numero}")
 async def reset_conversation(numero: str):
     """Reinicia el estado de conversación de un número específico"""
@@ -150,8 +146,3 @@ async def reset_conversation(numero: str):
         conversaciones_estado.pop(numero)
         return {"success": True, "message": f"Estado de conversación para {numero} reiniciado"}
     return {"success": False, "message": f"No se encontró estado para {numero}"}
-
-@router.get("/status")
-async def get_conversation_status():
-    """Obtiene el estado actual de todas las conversaciones"""
-    return {"conversaciones": conversaciones_estado}
