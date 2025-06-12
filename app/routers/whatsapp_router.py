@@ -47,7 +47,7 @@ async def whatsapp_webhook(
         entrega = get_entrega_by_destinatario(db, telefono=numero)
         if not entrega:
             await enviar_mensaje_whatsapp(
-                chat_id,
+                numero,
                 "Hola 👋 Lo siento, no encontré ninguna encuesta pendiente para este número."
             )
             return {"success": True}
@@ -68,7 +68,7 @@ async def whatsapp_webhook(
                 except Exception as e:
                     logger.error(f"Error iniciando encuesta: {str(e)}")
                     await enviar_mensaje_whatsapp(
-                        chat_id,
+                        numero,
                         "Lo siento, ocurrió un error al iniciar la encuesta. Por favor intenta nuevamente en unos minutos."
                     )
                     return {"success": False, "error": str(e)}
@@ -108,10 +108,10 @@ async def whatsapp_webhook(
             resultado = await procesar_respuesta(db, entrega.conversacion.id, texto)
             
             if "error" in resultado:
-                await enviar_mensaje_whatsapp(chat_id, resultado["error"])
+                await enviar_mensaje_whatsapp(numero, resultado["error"])
             else:
                 await enviar_mensaje_whatsapp(
-                    chat_id, 
+                    numero, 
                     resultado["siguiente_pregunta"],
                     resultado.get("opciones")
                 )
@@ -119,7 +119,7 @@ async def whatsapp_webhook(
                 # Si se completó la encuesta
                 if resultado.get("completada", False):
                     await enviar_mensaje_whatsapp(
-                        chat_id,
+                        numero,
                         "¡Muchas gracias por completar la encuesta! Tus respuestas son muy valiosas para nosotros."
                     )
                     # Restablecer estado
@@ -132,7 +132,7 @@ async def whatsapp_webhook(
         else:
             # Mensaje genérico para reanudar
             await enviar_mensaje_whatsapp(
-                chat_id,
+                numero,
                 "Hola de nuevo. Para iniciar o continuar con la encuesta, por favor escribe 'INICIAR'."
             )
             conversaciones_estado[numero] = 'esperando_confirmacion'
@@ -144,7 +144,7 @@ async def whatsapp_webhook(
         try:
             if 'chat_id' in locals():
                 await enviar_mensaje_whatsapp(
-                    chat_id,
+                    numero,
                     "Lo siento, ha ocurrido un error al procesar tu mensaje. Por favor, intenta nuevamente más tarde."
                 )
         except:
