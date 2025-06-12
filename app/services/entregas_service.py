@@ -142,18 +142,23 @@ def get_entrega_by_destinatario(
     email: Optional[str] = None, 
     telefono: Optional[str] = None
 ) -> Optional[EntregaEncuesta]:
-    """Busca una entrega por el email o teléfono del destinatario"""
+    """Busca una entrega por el email o teléfono del destinatario con la relación conversación cargada"""
     if not email and not telefono:
         return None
 
-    query = db.query(EntregaEncuesta).join(EntregaEncuesta.destinatario)
+    query = (db.query(EntregaEncuesta)
+             .join(EntregaEncuesta.destinatario)
+             .options(joinedload(EntregaEncuesta.conversacion))  # Cargar la relación
+             )
     
     if email:
         query = query.filter(Destinatario.email == email)
     if telefono:
-        query = query.filter(Destinatario.telefono == telefono)
+        # Normalizar teléfono para búsqueda
+        telefono_limpio = telefono.split('@')[0] if '@' in telefono else telefono
+        query = query.filter(Destinatario.telefono.contains(telefono_limpio))
         
-    return query.first()
+    return query.order_by(EntregaEncuesta.created_at.desc()).first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     """Inicia el flujo de preguntas de la encuesta después de la confirmación"""

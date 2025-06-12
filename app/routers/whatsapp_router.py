@@ -4,6 +4,7 @@ import logging
 import re
 
 from app.core.database import get_db
+from app.models.survey import ConversacionEncuesta
 from app.services.conversacion_service import procesar_respuesta
 from app.services.entregas_service import get_entrega_by_destinatario, iniciar_conversacion_whatsapp
 from app.services.whatsapp_service import enviar_mensaje_whatsapp
@@ -86,12 +87,24 @@ async def whatsapp_webhook(
         
         # Si la encuesta ya está en progreso, procesar la respuesta
         elif estado_actual == 'encuesta_en_progreso':
-            if not entrega.conversacion:
-                # Si por alguna razón no existe la conversación, reiniciar
-                await iniciar_conversacion_whatsapp(db, entrega.id)
-                return {"success": True}
+            # Cargar explícitamente la conversación si no está cargada
+            if not hasattr(entrega, 'conversacion') or entrega.conversacion is None:
+                # Buscar la conversación manualmente
+                conversacion = (
+                    db.query(ConversacionEncuesta)
+                    .filter(ConversacionEncuesta.entrega_id == entrega.id)
+                    .first()
+                )
+                
+                if not conversacion:
+                    logger.warning(f"No hay conversación para la entrega {entrega.id}, iniciando una nueva")
+                    await iniciar_conversacion_whatsapp(db, entrega.id)
+                    return {"success": True}
+                else:
+                    # La conversación existe pero no estaba cargada en la relación
+                    entrega.conversacion = conversacion
             
-            # Procesar la respuesta normalmente
+            # Ahora podemos procesar la respuesta con seguridad
             resultado = await procesar_respuesta(db, entrega.conversacion.id, texto)
             
             if "error" in resultado:
