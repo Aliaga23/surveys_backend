@@ -29,7 +29,7 @@ async def whatsapp_webhook(
         # Validar que sea un mensaje de texto
         if payload.get("messageType") != "text":
             return {"success": True}
-        
+        print("Payload recibido:", payload)
         chat_id = payload.get("chatId", "")  # Formato: 1234567890@c.us
         if not chat_id or "@c.us" not in chat_id:
             return {"success": False, "error": "Invalid chatId"}
