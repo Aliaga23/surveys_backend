@@ -47,10 +47,13 @@ async def whatsapp_webhook(
         if "error" in resultado:
             await enviar_mensaje_whatsapp(chat_id, resultado["error"])
         else:
-            await enviar_mensaje_whatsapp(chat_id, resultado["siguiente_pregunta"])
+            await enviar_mensaje_whatsapp(
+                chat_id, 
+                resultado["siguiente_pregunta"],
+                resultado.get("opciones")
+            )
             
             if resultado["completada"]:
-                await crear_respuesta_encuesta(db, entrega.id, entrega.conversacion.historial)
                 await enviar_mensaje_whatsapp(
                     chat_id,
                     "¡Gracias por completar la encuesta! Tus respuestas han sido registradas."

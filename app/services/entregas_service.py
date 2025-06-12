@@ -172,24 +172,27 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     if not primera_pregunta:
         raise ValueError("La plantilla no tiene preguntas")
 
-    # Crear conversación
-    conversacion = ConversacionEncuesta(
-        entrega_id=entrega_id,
-        pregunta_actual_id=primera_pregunta.id
-    )
-    db.add(conversacion)
-    
     # Generar saludo y primera pregunta
     texto_inicial = await generar_siguiente_pregunta(
         [],
         primera_pregunta.texto,
         primera_pregunta.tipo_pregunta_id
     )
+
+    # Crear conversación con el historial inicial
+    conversacion = ConversacionEncuesta(
+        entrega_id=entrega_id,
+        pregunta_actual_id=primera_pregunta.id,
+        historial=[{
+            "role": "assistant",
+            "content": texto_inicial,
+            "timestamp": datetime.now().isoformat()
+        }]
+    )
     
-    mensaje_inicial = Mensaje(role="assistant", content=texto_inicial)
-    conversacion.historial.append(mensaje_inicial.dict())
-    
+    db.add(conversacion)
     db.commit()
+    db.refresh(conversacion)
     
     # Enviar mensaje inicial por WhatsApp
     await enviar_mensaje_whatsapp(entrega.destinatario.telefono, texto_inicial)
