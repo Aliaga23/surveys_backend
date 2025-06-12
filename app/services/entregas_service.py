@@ -158,7 +158,8 @@ def get_entrega_by_destinatario(
         telefono_limpio = telefono.split('@')[0] if '@' in telefono else telefono
         query = query.filter(Destinatario.telefono.contains(telefono_limpio))
         
-    return query.order_by(EntregaEncuesta.created_at.desc()).first()
+    # Ordenar por enviado_en en lugar de created_at
+    return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     """Inicia el flujo de preguntas de la encuesta después de la confirmación"""
