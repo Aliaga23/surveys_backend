@@ -7,18 +7,20 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 async def enviar_mensaje_whatsapp(
-    numero: str, 
+    chat_id: str, 
     mensaje: str, 
     opciones: Optional[List[str]] = None
 ):
     """
-    Envía un mensaje usando gate.whapi.cloud con opciones si existen
+    Envía un mensaje usando Whapi API con opciones si existen
     """
-    numero = numero.split('@')[0] if '@' in numero else numero
+    # Asegurar formato correcto del chat_id (añadir @c.us si no está)
+    if "@c.us" not in chat_id:
+        chat_id = f"{chat_id}@c.us"
     
     # Formatear el mensaje con las opciones si existen
     mensaje_completo = mensaje
-    if opciones:
+    if opciones and len(opciones) > 0:
         mensaje_completo += "\n\nOpciones disponibles:\n" + "\n".join(f"• {opcion}" for opcion in opciones)
     
     async with httpx.AsyncClient() as client:
@@ -26,15 +28,18 @@ async def enviar_mensaje_whatsapp(
             response = await client.post(
                 f"{settings.WHAPI_API_URL}/messages/text",
                 headers={
-                    "Authorization": settings.WHAPI_TOKEN,
+                    "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "to": numero,
-                    "body": mensaje_completo
+                    "chatId": chat_id,  # Usar chatId según la documentación de Whapi
+                    "body": mensaje_completo  # Usar body según la documentación de Whapi
                 },
                 timeout=10.0
             )
+            
+            # Log para depuración
+            logger.debug(f"Respuesta de Whapi: Status {response.status_code}")
             
             response.raise_for_status()
             return response.json()
@@ -42,7 +47,8 @@ async def enviar_mensaje_whatsapp(
         except httpx.HTTPError as e:
             error_msg = f"Error enviando mensaje WhatsApp: {str(e)}"
             logger.error(error_msg)
-            logger.error(f"Response content: {e.response.text if hasattr(e, 'response') else 'No response'}")
+            if hasattr(e, 'response') and e.response:
+                logger.error(f"Response content: {e.response.text}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=error_msg
