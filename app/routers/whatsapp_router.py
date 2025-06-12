@@ -65,10 +65,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     
     # Extraer la información importante según la estructura de Whapi
     chat_id = message.get("from", "")  # Formato: 1234567890@c.us
-    if not chat_id or "@c.us" not in chat_id:
-        print(f"Chat ID inválido: {chat_id}")
-        return {"success": False, "error": "Invalid chat ID"}
-    
+
     # Usar solo el número sin el sufijo @c.us para las búsquedas
     numero = chat_id.split("@")[0]
     
