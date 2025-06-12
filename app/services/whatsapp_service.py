@@ -32,7 +32,7 @@ async def enviar_mensaje_whatsapp(
                     "Content-Type": "application/json"
                 },
                 json={
-                    "chatId": chat_id,  # Usar chatId según la documentación de Whapi
+                    "to": chat_id,  # Usar chatId según la documentación de Whapi
                     "body": mensaje_completo  # Usar body según la documentación de Whapi
                 },
                 timeout=10.0
