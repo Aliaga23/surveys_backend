@@ -24,6 +24,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Webhook para recibir mensajes de Whapi
     """
+    print("Webhook recibido en /whatsapp/webhook")
     try:
         # Verificar la firma de Whapi (opcional pero recomendado para producción)
         body = await request.body()
