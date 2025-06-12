@@ -156,7 +156,7 @@ def get_entrega_by_destinatario(
     return query.first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
-    """Inicia una conversación de WhatsApp para una entrega"""
+    """Inicia el flujo de preguntas de la encuesta después de la confirmación"""
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
@@ -172,14 +172,14 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     if not primera_pregunta:
         raise ValueError("La plantilla no tiene preguntas")
 
-    # Generar saludo y primera pregunta
+    # Generar texto de la primera pregunta
     texto_inicial = await generar_siguiente_pregunta(
         [],
         primera_pregunta.texto,
         primera_pregunta.tipo_pregunta_id
     )
 
-    # Crear conversación con el historial inicial
+    # Crear conversación
     conversacion = ConversacionEncuesta(
         entrega_id=entrega_id,
         pregunta_actual_id=primera_pregunta.id,
@@ -194,8 +194,17 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     db.commit()
     db.refresh(conversacion)
     
-    # Enviar mensaje inicial por WhatsApp
-    await enviar_mensaje_whatsapp(entrega.destinatario.telefono, texto_inicial)
+    # Determinar si hay opciones para presentar
+    opciones = None
+    if primera_pregunta.tipo_pregunta_id in [3, 4]:  # Select o Multiselect
+        opciones = [opcion.texto for opcion in primera_pregunta.opciones]
+    
+    # Enviar primer mensaje con opciones si existen
+    await enviar_mensaje_whatsapp(
+        entrega.destinatario.telefono, 
+        texto_inicial,
+        opciones
+    )
     
     return conversacion
 
@@ -214,16 +223,38 @@ async def create_entrega(
     db.commit()
     db.refresh(entrega)
 
-    # Si es canal WhatsApp, iniciar conversación automáticamente
+    # Si es canal WhatsApp, enviar saludo de bienvenida inmediatamente
     if payload.canal_id == 2:  # WhatsApp
         try:
-            await iniciar_conversacion_whatsapp(db, entrega.id)
-            # Marcar como enviada
+            # Obtener información necesaria
+            entrega = get_entrega_con_plantilla(db, entrega.id)
+            if not entrega.destinatario.telefono:
+                raise ValueError("El destinatario no tiene número de teléfono")
+            
+            # Enviar saludo inicial
+            nombre = entrega.destinatario.nombre or "estimado/a"
+            mensaje_saludo = (
+                f"¡Hola {nombre}! 👋\n\n"
+                f"Soy el asistente virtual de {entrega.campana.nombre}. "
+                f"Tenemos una encuesta breve que nos gustaría que completes.\n\n"
+                f"¿Te gustaría empezar ahora? Responde 'SI' para comenzar o 'NO' para hacerlo más tarde."
+            )
+            
+            await enviar_mensaje_whatsapp(entrega.destinatario.telefono, mensaje_saludo)
+            
+            # Marcar como enviada y agregar a estado de conversaciones
             entrega.estado_id = ESTADO_ENVIADO
             entrega.enviado_en = datetime.now()
             db.commit()
             db.refresh(entrega)
+            
+            # Agregar a las conversaciones activas
+            from app.routers.whatsapp_router import conversaciones_estado
+            numero = entrega.destinatario.telefono.split('@')[0] if '@' in entrega.destinatario.telefono else entrega.destinatario.telefono
+            conversaciones_estado[numero] = 'esperando_confirmacion'
+            
         except Exception as e:
+            logger.error(f"Error iniciando conversación WhatsApp: {str(e)}")
             entrega.estado_id = ESTADO_FALLIDO
             db.commit()
             raise HTTPException(
