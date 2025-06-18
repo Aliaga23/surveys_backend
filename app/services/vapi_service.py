@@ -131,12 +131,3 @@ async def crear_llamada_encuesta(
 
 
 
-client = Vapi(token=settings.VAPI_API_KEY)
-
-print("\nModelos disponibles REALMENTE para tu organización:")
-for m in client.models.list():
-    print(" •", m.id)
-
-print("\nVoces disponibles REALMENTE para tu organización:")
-for v in client.voices.list():
-    print(" •", v.id)
