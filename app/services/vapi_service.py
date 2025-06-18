@@ -94,8 +94,8 @@ async def crear_llamada_encuesta(
         ),
         "context": contexto,
         "analysisPlan": {"structuredDataSchema": schema},
-        "voice": "juan-rime-ai",      # ⚠️ Reemplaza por el slug que arroje listar_slugs_disponibles()
-        "model": "gpt-4o-mini",       # ⚠️ Reemplaza por el slug disponible en tu cuenta
+        "voice": "juan-rime-ai",        # Voz en español de la lista permitida
+        "model": "gpt-4o"               # Modelo permitido de la lista
     }
 
     try:
@@ -128,3 +128,15 @@ async def crear_llamada_encuesta(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creando llamada con Vapi: {exc}",
         ) from exc
+
+
+
+client = Vapi(token=settings.VAPI_API_KEY)
+
+print("\nModelos disponibles REALMENTE para tu organización:")
+for m in client.models.list():
+    print(" •", m.id)
+
+print("\nVoces disponibles REALMENTE para tu organización:")
+for v in client.voices.list():
+    print(" •", v.id)
