@@ -15,6 +15,30 @@ from app.models.survey import VapiCallRelation
 # ──────────────────────────────────────────────────────────────────────────────
 # FUNCIÓN PRINCIPAL
 # ──────────────────────────────────────────────────────────────────────────────
+# Función para formatear las preguntas exactamente como están, sin agregar contenido
+def formatear_preguntas_para_prompt(preguntas: List[Dict]) -> str:
+    """
+    Formatea las preguntas exactamente como están en la base de datos
+    para el prompt de Vapi, manteniendo los IDs originales.
+    """
+    preguntas_formateadas = ""
+    
+    for i, pregunta in enumerate(preguntas):
+        # Mostrar la pregunta exactamente como está, con su ID original
+        preguntas_formateadas += f"\n## Pregunta {i+1}: {pregunta['texto']}\n"
+        preguntas_formateadas += f"ID: {pregunta['id']}\n"
+        preguntas_formateadas += f"Tipo: {pregunta['tipo_pregunta_id']}\n"
+        
+        # Añadir opciones si existen, manteniendo sus IDs exactos
+        if pregunta.get("opciones"):
+            preguntas_formateadas += "Opciones:\n"
+            for j, opcion in enumerate(pregunta["opciones"]):
+                preguntas_formateadas += f"- {opcion['texto']} (ID: {opcion['id']})\n"
+        
+        preguntas_formateadas += "\n"
+    
+    return preguntas_formateadas
+
 async def crear_llamada_encuesta(
     db: Session,
     entrega_id: UUID,
@@ -35,8 +59,25 @@ async def crear_llamada_encuesta(
         if not telefono_limpio.startswith("+"):
             telefono_limpio = f"+{telefono_limpio}"
         
-        # Formatear las preguntas para el prompt
-        preguntas_formateadas = formatear_preguntas_para_prompt(preguntas)
+        # Formatear las preguntas para el prompt - manteniéndolas exactas
+        preguntas_exactas = formatear_preguntas_para_prompt(preguntas)
+        
+        # También pasar las preguntas estructuradas para que la IA tenga acceso directo
+        preguntas_estructuradas = []
+        for pregunta in preguntas:
+            pregunta_estructurada = {
+                "id": str(pregunta["id"]),
+                "texto": pregunta["texto"],
+                "tipo": pregunta["tipo_pregunta_id"]
+            }
+            
+            if pregunta.get("opciones"):
+                pregunta_estructurada["opciones"] = [
+                    {"id": str(opcion["id"]), "texto": opcion["texto"]}
+                    for opcion in pregunta["opciones"]
+                ]
+                
+            preguntas_estructuradas.append(pregunta_estructurada)
         
         # Crear la llamada usando el ID de asistente pre-configurado
         call = client.calls.create(
@@ -50,7 +91,8 @@ async def crear_llamada_encuesta(
                 "variableValues": {
                     "nombre": nombre_destinatario,
                     "campana": campana_nombre,
-                    "preguntas": preguntas_formateadas  # String formateado con todas las preguntas
+                    "preguntas": preguntas_exactas,
+                    "preguntas_json": preguntas_estructuradas  # Datos estructurados para referencia
                 }
             }
         )
@@ -74,41 +116,6 @@ async def crear_llamada_encuesta(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creando llamada con Vapi: {str(e)}"
         )
-
-# Función para formatear preguntas para el asistente de Vapi
-def formatear_preguntas_para_prompt(preguntas: List[Dict]) -> str:
-    """
-    Formatea las preguntas para el prompt de Vapi de forma legible
-    
-    Devuelve un string con el formato adecuado para que el asistente
-    pueda leer las preguntas y sus opciones.
-    """
-    preguntas_formateadas = ""
-    
-    for i, pregunta in enumerate(preguntas):
-        preguntas_formateadas += f"\n## Pregunta {i+1}: {pregunta['texto']}\n"
-        preguntas_formateadas += f"(ID: {pregunta['id']}, Tipo: {pregunta['tipo_pregunta_id']})\n"
-        
-        # Instrucciones específicas según el tipo de pregunta
-        if pregunta['tipo_pregunta_id'] == 1:
-            preguntas_formateadas += "Tipo: Respuesta abierta (texto)\n"
-        elif pregunta['tipo_pregunta_id'] == 2:
-            preguntas_formateadas += "Tipo: Respuesta numérica (1-10)\n"
-        elif pregunta['tipo_pregunta_id'] == 3:
-            preguntas_formateadas += "Tipo: Selección única\n"
-        elif pregunta['tipo_pregunta_id'] == 4:
-            preguntas_formateadas += "Tipo: Selección múltiple\n"
-        
-        # Añadir opciones si existen
-        if pregunta.get("opciones"):
-            preguntas_formateadas += "\nOpciones:\n"
-            for j, opcion in enumerate(pregunta["opciones"]):
-                letra = chr(65 + j)  # A, B, C, ...
-                preguntas_formateadas += f"- {letra}) {opcion['texto']} (ID: {opcion['id']})\n"
-        
-        preguntas_formateadas += "\n"
-    
-    return preguntas_formateadas
 
 
 

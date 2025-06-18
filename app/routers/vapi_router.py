@@ -48,32 +48,25 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
     """
     Procesa las respuestas recibidas de una llamada Vapi completada
     """
-    # Extraer el ID de la llamada según la estructura de eventos de Vapi
+    # Extraer el ID de la llamada
     call_id = payload.get("call", {}).get("id")
     if not call_id:
-        print("No se encontró call_id en el webhook")
         return {"success": False, "error": "Missing call_id"}
     
     # Buscar la relación entre call_id y entrega_id
     relacion = db.query(VapiCallRelation).filter(VapiCallRelation.call_id == call_id).first()
     if not relacion:
-        print(f"No se encontró relación para call_id: {call_id}")
         return {"success": False, "error": "Call ID not found in relations"}
     
     entrega_id = relacion.entrega_id
-    print(f"Procesando respuestas para entrega: {entrega_id}")
     
     try:
-        # Obtener datos estructurados según la estructura de eventos de Vapi
+        # Obtener datos estructurados del análisis
         structured_data = payload.get("call", {}).get("analysis", {}).get("structuredData", {})
         if not structured_data:
-            print("No se encontraron datos estructurados en la respuesta")
             return {"success": False, "error": "No structured data found in response"}
         
-        # Imprimir para depuración
-        print(f"Datos estructurados recibidos: {structured_data}")
-        
-        # Procesar respuestas según el esquema preestablecido
+        # Procesar respuestas - usar exactamente los IDs proporcionados
         respuestas_raw = structured_data.get("respuestas_preguntas", [])
         puntuacion = structured_data.get("puntuacion")
         
@@ -84,6 +77,7 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
             if not pregunta_id:
                 continue
                 
+            # Asegurarnos de usar exactamente el ID proporcionado
             respuesta_pregunta = {
                 "pregunta_id": UUID(pregunta_id),
                 "texto": resp.get("texto"),
@@ -102,9 +96,8 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
         
         # Guardar en la base de datos
         respuesta = create_respuesta(db, entrega_id, respuesta_schema)
-        print(f"Respuesta creada con ID: {respuesta.id}")
         
-        # Marcar entrega como respondida
+        # Marcar la entrega como respondida
         mark_as_responded(db, entrega_id)
         
         return {
@@ -113,7 +106,6 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
         }
         
     except Exception as e:
-        print(f"Error procesando respuestas: {str(e)}")
         return {"success": False, "error": str(e)}
 
 async def procesar_llamada_fallida(payload: dict, db: Session, motivo: str):
