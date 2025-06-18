@@ -18,26 +18,50 @@ from app.models.survey import VapiCallRelation
 # Función para formatear las preguntas exactamente como están, sin agregar contenido
 def formatear_preguntas_para_prompt(preguntas: List[Dict]) -> str:
     """
-    Formatea las preguntas exactamente como están en la base de datos
-    para el prompt de Vapi, manteniendo los IDs originales.
+    Formatea las preguntas incluyendo TODOS los datos técnicos necesarios
+    para que el asistente pueda construir la respuesta estructurada correctamente.
     """
     preguntas_formateadas = ""
     
     for i, pregunta in enumerate(preguntas):
-        # Mostrar la pregunta exactamente como está, con su ID original
-        preguntas_formateadas += f"\n## Pregunta {i+1}: {pregunta['texto']}\n"
-        preguntas_formateadas += f"ID: {pregunta['id']}\n"
-        preguntas_formateadas += f"Tipo: {pregunta['tipo_pregunta_id']}\n"
+        preguntas_formateadas += f"\n--- PREGUNTA {i+1} ---\n"
+        preguntas_formateadas += f"Texto: {pregunta['texto']}\n"
+        preguntas_formateadas += f"pregunta_id: {pregunta['id']}\n"
+        preguntas_formateadas += f"tipo_pregunta_id: {pregunta['tipo_pregunta_id']}\n"
         
-        # Añadir opciones si existen, manteniendo sus IDs exactos
+        # Añadir instrucciones según el tipo de pregunta
+        if pregunta['tipo_pregunta_id'] == 1:  # Texto
+            preguntas_formateadas += "Instrucción: Captura respuesta en formato texto\n"
+        elif pregunta['tipo_pregunta_id'] == 2:  # Número
+            preguntas_formateadas += "Instrucción: Captura respuesta numérica (1-10)\n"
+        elif pregunta['tipo_pregunta_id'] == 3:  # Selección única
+            preguntas_formateadas += "Instrucción: Captura una sola opción. Usa el opcion_id exacto de la opción seleccionada\n"
+        elif pregunta['tipo_pregunta_id'] == 4:  # Selección múltiple
+            preguntas_formateadas += "Instrucción: Captura múltiples opciones. Usa los opcion_id exactos de las opciones seleccionadas\n"
+        
+        # Añadir opciones si existen con TODOS sus datos
         if pregunta.get("opciones"):
-            preguntas_formateadas += "Opciones:\n"
+            preguntas_formateadas += "\nOpciones disponibles:\n"
             for j, opcion in enumerate(pregunta["opciones"]):
-                preguntas_formateadas += f"- {opcion['texto']} (ID: {opcion['id']})\n"
+                letra = chr(65 + j)  # A, B, C, ...
+                preguntas_formateadas += f"- Opción {letra}: {opcion['texto']}\n"
+                preguntas_formateadas += f"  opcion_id: {opcion['id']}\n"
         
         preguntas_formateadas += "\n"
     
+    # Agregar instrucciones explícitas para la construcción de la respuesta
+    preguntas_formateadas += "\n--- INSTRUCCIONES PARA ESTRUCTURAR LA RESPUESTA ---\n"
+    preguntas_formateadas += "1. Para cada pregunta, DEBES incluir todos estos campos en tu respuesta estructurada:\n"
+    preguntas_formateadas += "   - pregunta_id: Exactamente como se te proporcionó\n"
+    preguntas_formateadas += "   - tipo_pregunta_id: El número del tipo de pregunta\n"
+    preguntas_formateadas += "   - Para preguntas tipo 1: Incluye 'texto' con la respuesta\n"
+    preguntas_formateadas += "   - Para preguntas tipo 2: Incluye 'numero' con el valor numérico\n"
+    preguntas_formateadas += "   - Para preguntas tipo 3: Incluye 'opcion_id' con el ID exacto de la opción seleccionada\n"
+    preguntas_formateadas += "   - Para preguntas tipo 4: Incluye 'opcion_id' como array de IDs de las opciones seleccionadas\n"
+    preguntas_formateadas += "2. Calcula la puntuación promedio de todas las respuestas numéricas\n"
+    
     return preguntas_formateadas
+
 
 async def crear_llamada_encuesta(
     db: Session,
@@ -48,7 +72,8 @@ async def crear_llamada_encuesta(
     preguntas: List[Dict],
 ):
     """
-    Crea una llamada de encuesta utilizando Vapi con un asistente pre-configurado
+    Crea una llamada de encuesta utilizando Vapi con un asistente pre-configurado,
+    asegurando que se pasen TODOS los datos necesarios para las respuestas.
     """
     try:
         # Inicializar el cliente de Vapi
@@ -59,25 +84,8 @@ async def crear_llamada_encuesta(
         if not telefono_limpio.startswith("+"):
             telefono_limpio = f"+{telefono_limpio}"
         
-        # Formatear las preguntas para el prompt - manteniéndolas exactas
-        preguntas_exactas = formatear_preguntas_para_prompt(preguntas)
-        
-        # También pasar las preguntas estructuradas para que la IA tenga acceso directo
-        preguntas_estructuradas = []
-        for pregunta in preguntas:
-            pregunta_estructurada = {
-                "id": str(pregunta["id"]),
-                "texto": pregunta["texto"],
-                "tipo": pregunta["tipo_pregunta_id"]
-            }
-            
-            if pregunta.get("opciones"):
-                pregunta_estructurada["opciones"] = [
-                    {"id": str(opcion["id"]), "texto": opcion["texto"]}
-                    for opcion in pregunta["opciones"]
-                ]
-                
-            preguntas_estructuradas.append(pregunta_estructurada)
+        # Formatear las preguntas con TODOS los datos técnicos necesarios
+        preguntas_detalladas = formatear_preguntas_para_prompt(preguntas)
         
         # Crear la llamada usando el ID de asistente pre-configurado
         call = client.calls.create(
@@ -91,8 +99,7 @@ async def crear_llamada_encuesta(
                 "variableValues": {
                     "nombre": nombre_destinatario,
                     "campana": campana_nombre,
-                    "preguntas": preguntas_exactas,
-                    "preguntas_json": preguntas_estructuradas  # Datos estructurados para referencia
+                    "preguntas": preguntas_detalladas  # Incluye TODOS los datos técnicos
                 }
             }
         )
