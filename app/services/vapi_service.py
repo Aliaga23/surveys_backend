@@ -14,12 +14,10 @@ async def crear_llamada_encuesta(
     Crea una llamada con Vapi para realizar una encuesta telefónica
     usando el SDK oficial de Vapi Server (vapi_server_sdk).
     """
-    # Normalizar el teléfono (quitar +, espacios, etc.)
     telefono_limpio = telefono.replace("+", "").replace(" ", "")
     if not telefono_limpio.isdigit():
         raise ValueError(f"Formato de teléfono inválido: {telefono}")
 
-    # Formatear las preguntas para enviar como metadata (opcional)
     preguntas_vapi = []
     for idx, pregunta in enumerate(preguntas):
         pregunta_vapi = {
@@ -36,13 +34,11 @@ async def crear_llamada_encuesta(
         preguntas_vapi.append(pregunta_vapi)
 
     try:
-        # Inicializar cliente del SDK de servidor
         client = Vapi(token=settings.VAPI_API_KEY)
 
-        # Crear llamada
         response = client.calls.create(
-            phoneNumberId=settings.VAPI_PHONE_NUMBER_ID,  # <- tu número de Vapi
-            assistantId=settings.VAPI_ASSISTANT_ID,        # <- tu asistente de Vapi
+            phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
+            assistant_id=settings.VAPI_ASSISTANT_ID,
             customer={
                 "number": f"+{telefono_limpio}",
                 "name": nombre_destinatario
@@ -52,7 +48,7 @@ async def crear_llamada_encuesta(
                 "campana": campana_nombre,
                 "preguntas": preguntas_vapi
             },
-            webhookUrl=f"{settings.API_BASE_URL}/vapi/webhook"
+            webhook_url=f"{settings.API_BASE_URL}/vapi/webhook"
         )
 
         return {
