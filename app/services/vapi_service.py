@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 from uuid import UUID
-
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from vapi import Vapi
@@ -22,112 +21,94 @@ async def crear_llamada_encuesta(
     telefono: str,
     nombre_destinatario: str,
     campana_nombre: str,
-    preguntas: List[Dict[str, Any]],
+    preguntas: List[Dict],
 ):
     """
-    Lanza una llamada de encuesta con Vapi y registra la relación call_id → entrega_id.
-
-    - **db**: sesión SQLAlchemy
-    - **entrega_id**: FK a entrega_encuesta
-    - **telefono**: número del destinatario (código país incluido)
-    - **nombre_destinatario**: para personalizar el saludo
-    - **campana_nombre**: nombre visible de la campaña
-    - **preguntas**: lista de dicts con la estructura:
-        {
-          "id": str(uuid),
-          "texto": str,
-          "tipo_pregunta_id": int,
-          "opciones": [ {"id": str(uuid), "texto": str}, ... ]
-        }
+    Crea una llamada de encuesta utilizando Vapi con un asistente pre-configurado
     """
-    # 1. Cliente Vapi
-    client = Vapi(token=settings.VAPI_API_KEY)
-
-    # 2. Teléfono en formato E.164 (+591…)
-    telefono_e164 = telefono.replace(" ", "")
-    if not telefono_e164.startswith("+"):
-        telefono_e164 = f"+{telefono_e164}"
-
-    # 3. Construir prompt/contexto dinámico
-    contexto = (
-        "Eres un asistente profesional realizando una encuesta telefónica.\n\n"
-        "Tu objetivo es obtener respuestas claras a las siguientes preguntas:\n\n"
-    )
-
-    for idx, p in enumerate(preguntas, start=1):
-        contexto += f"Pregunta {idx}: {p['texto']}\n"
-        if p.get("opciones"):
-            contexto += "Opciones:\n"
-            for j, op in enumerate(p["opciones"]):
-                letra = chr(65 + j)
-                contexto += f"  {letra}) {op['texto']}\n"
-        contexto += "\n"
-
-    # 4. JSON Schema para análisis estructurado
-    schema = {
-        "type": "object",
-        "properties": {
-            "puntuacion": {"type": "number"},
-            "respuestas_preguntas": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "pregunta_id": {"type": "string"},
-                        "tipo_pregunta_id": {"type": "integer"},
-                        "texto": {"type": "string"},
-                        "numero": {"type": "number"},
-                        "opcion_id": {"type": "string"},
-                    },
-                    "required": ["pregunta_id", "tipo_pregunta_id"],
-                },
-            },
-        },
-        "required": ["respuestas_preguntas"],
-    }
-
-    # 5. Assistant transitorio
-    assistant = {
-        "firstMessage": (
-            "Hola {{nombre}}, soy un asistente realizando una encuesta "
-            "sobre {{campana}}. ¿Tienes unos minutos?"
-        ),
-        "context": contexto,
-        "analysisPlan": {"structuredDataSchema": schema},
-        "voice": "juan-rime-ai" # Voz por defecto
-        # Omitimos voice y model para usar los valores por defecto
-    }
-
     try:
-        # 6. Crear la llamada
+        # Inicializar el cliente de Vapi
+        client = Vapi(token=settings.VAPI_API_KEY)
+        
+        # Preparar el número de teléfono para formato E.164
+        telefono_limpio = telefono.replace(" ", "")
+        if not telefono_limpio.startswith("+"):
+            telefono_limpio = f"+{telefono_limpio}"
+        
+        # Formatear las preguntas para el prompt
+        preguntas_formateadas = formatear_preguntas_para_prompt(preguntas)
+        
+        # Crear la llamada usando el ID de asistente pre-configurado
         call = client.calls.create(
             phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
-            assistant=assistant,
+            assistant_id=settings.VAPI_ASSISTANT_ID,
             customer={
-                "number": telefono_e164,
-                "name": nombre_destinatario,
+                "number": telefono_limpio,
+                "name": nombre_destinatario
             },
             assistant_overrides={
                 "variableValues": {
                     "nombre": nombre_destinatario,
                     "campana": campana_nombre,
+                    "preguntas": preguntas_formateadas  # String formateado con todas las preguntas
                 }
-            },
+            }
         )
-
-        # 7. Persistir relación call_id ↔ entrega_id
-        db.add(VapiCallRelation(entrega_id=entrega_id, call_id=call.id))
+        
+        # Guardar la relación call_id ↔ entrega_id
+        relation = VapiCallRelation(
+            entrega_id=entrega_id, 
+            call_id=call.id
+        )
+        db.add(relation)
         db.commit()
-
-        return {"call_id": call.id, "status": call.status}
-
-    except Exception as exc:
-        # Rollback por si falla antes del commit
-        db.rollback()
+        
+        return {
+            "call_id": call.id,
+            "status": call.status
+        }
+            
+    except Exception as e:
+        print(f"Error al crear llamada Vapi: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creando llamada con Vapi: {exc}",
-        ) from exc
+            detail=f"Error creando llamada con Vapi: {str(e)}"
+        )
+
+# Función para formatear preguntas para el asistente de Vapi
+def formatear_preguntas_para_prompt(preguntas: List[Dict]) -> str:
+    """
+    Formatea las preguntas para el prompt de Vapi de forma legible
+    
+    Devuelve un string con el formato adecuado para que el asistente
+    pueda leer las preguntas y sus opciones.
+    """
+    preguntas_formateadas = ""
+    
+    for i, pregunta in enumerate(preguntas):
+        preguntas_formateadas += f"\n## Pregunta {i+1}: {pregunta['texto']}\n"
+        preguntas_formateadas += f"(ID: {pregunta['id']}, Tipo: {pregunta['tipo_pregunta_id']})\n"
+        
+        # Instrucciones específicas según el tipo de pregunta
+        if pregunta['tipo_pregunta_id'] == 1:
+            preguntas_formateadas += "Tipo: Respuesta abierta (texto)\n"
+        elif pregunta['tipo_pregunta_id'] == 2:
+            preguntas_formateadas += "Tipo: Respuesta numérica (1-10)\n"
+        elif pregunta['tipo_pregunta_id'] == 3:
+            preguntas_formateadas += "Tipo: Selección única\n"
+        elif pregunta['tipo_pregunta_id'] == 4:
+            preguntas_formateadas += "Tipo: Selección múltiple\n"
+        
+        # Añadir opciones si existen
+        if pregunta.get("opciones"):
+            preguntas_formateadas += "\nOpciones:\n"
+            for j, opcion in enumerate(pregunta["opciones"]):
+                letra = chr(65 + j)  # A, B, C, ...
+                preguntas_formateadas += f"- {letra}) {opcion['texto']} (ID: {opcion['id']})\n"
+        
+        preguntas_formateadas += "\n"
+    
+    return preguntas_formateadas
 
 
 
