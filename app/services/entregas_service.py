@@ -330,14 +330,15 @@ async def create_entrega(
             
             # Crear la llamada con Vapi
             nombre_destinatario = entrega.destinatario.nombre or "Estimado cliente"
-            campana_nombre = entrega.campana.nombre
+            campana_nombre = entrega.campana.nombre  # Usar el nombre de la campaña directamente
             
             await crear_llamada_encuesta(
+                db=db,
+                entrega_id=entrega.id,
                 telefono=entrega.destinatario.telefono,
                 nombre_destinatario=nombre_destinatario,
                 campana_nombre=campana_nombre,
-                preguntas=preguntas,
-                entrega_id=str(entrega.id)
+                preguntas=preguntas
             )
             
             # Marcar como enviada
