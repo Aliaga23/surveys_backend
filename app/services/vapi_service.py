@@ -100,25 +100,23 @@ async def crear_llamada_encuesta(
         contexto += "3. Para preguntas numéricas, extrae solo el número.\n"
         contexto += "4. Para preguntas de selección, extrae el ID de la opción seleccionada.\n"
         
-        # Definir el asistente transitorio
+        # Definir el asistente transitorio con los valores corregidos
         assistant = {
-            "firstMessage": f"Hola {{{{nombre}}}}, soy un asistente realizando una encuesta sobre {{{{campana}}}}. ¿Tienes unos minutos para responder algunas preguntas?",
+            "firstMessage": (
+                "Hola {{nombre}}, soy un asistente realizando una encuesta "
+                "sobre {{campana}}. ¿Tienes unos minutos?"
+            ),
             "context": contexto,
-            "analysisPlan": {
-                "structuredDataSchema": schema
-            },
-            "voice": "jennifer-playht",
-            "model": "gpt-4o"
+            "analysisPlan": {"structuredDataSchema": schema},
+            "voice": "azure:es-ES-AlvaroNeural",      # Voz en español corregida
+            "model": "gpt-4o-mini-cluster"            # Modelo corregido
         }
         
         # Crear la llamada usando el cliente oficial
         call = client.calls.create(
-            phone_number_id=settings.VAPI_PHONE_NUMBER_ID,  # Usando el nombre corregido
-            assistant=assistant,  # Asistente transitorio
-            customer={
-                "number": telefono_limpio,  # Ya incluye el + para formato E.164
-                "name": nombre_destinatario,
-            },
+            phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
+            assistant=assistant,
+            customer={"number": telefono_limpio, "name": nombre_destinatario},
             assistant_overrides={
                 "variableValues": {
                     "nombre": nombre_destinatario,
@@ -139,3 +137,4 @@ async def crear_llamada_encuesta(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creando llamada con Vapi: {str(e)}"
         )
+
