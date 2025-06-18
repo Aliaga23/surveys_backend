@@ -28,12 +28,11 @@ async def crear_llamada_encuesta(
     - preguntas: Lista de preguntas con sus opciones
     """
     try:
-        # Inicializar el cliente de Vapi
+        # Inicializar el cliente de Vapi según la documentación oficial
         client = Vapi(token=settings.VAPI_API_KEY)
         
         # Preparar el número de teléfono para formato E.164
         telefono_limpio = telefono.replace(" ", "")
-        # Asegurar que tenga prefijo +
         if not telefono_limpio.startswith("+"):
             telefono_limpio = f"+{telefono_limpio}"
         
@@ -100,7 +99,7 @@ async def crear_llamada_encuesta(
         contexto += "3. Para preguntas numéricas, extrae solo el número.\n"
         contexto += "4. Para preguntas de selección, extrae el ID de la opción seleccionada.\n"
         
-        # Definir el asistente transitorio con los valores corregidos
+        # Definir el asistente transitorio
         assistant = {
             "firstMessage": (
                 "Hola {{nombre}}, soy un asistente realizando una encuesta "
@@ -108,31 +107,43 @@ async def crear_llamada_encuesta(
             ),
             "context": contexto,
             "analysisPlan": {"structuredDataSchema": schema},
-            "voice": "azure:es-ES-AlvaroNeural",      # Voz en español corregida
-            "model": "gpt-4o-mini-cluster"            # Modelo corregido
+            "voice": "azure:es-ES-AlvaroNeural",  # Voz en español
+            "model": "gpt-4o-mini"                # Versión más precisa según docs
         }
         
-        # Crear la llamada usando el cliente oficial
+        # Crear la llamada según la documentación oficial
         call = client.calls.create(
             phone_number_id=settings.VAPI_PHONE_NUMBER_ID,
-            assistant=assistant,
-            customer={"number": telefono_limpio, "name": nombre_destinatario},
+            assistant=assistant,                          # Assistant transitorio
+            customer={
+                "number": telefono_limpio,                # Con formato E.164
+                "name": nombre_destinatario               # Nombre para personalizar
+            },
             assistant_overrides={
-                "variableValues": {
+                "variableValues": {                       # Variables para el mensaje
                     "nombre": nombre_destinatario,
                     "campana": campana_nombre
                 }
             }
         )
         
+        print(f"Llamada creada con ID: {call.id}, Estado: {call.status}")
+        
         # Guardar la relación call_id ↔ entrega_id
-        relation = VapiCallRelation(entrega_id=entrega_id, call_id=call.id)
+        relation = VapiCallRelation(
+            entrega_id=entrega_id, 
+            call_id=call.id
+        )
         db.add(relation)
         db.commit()
         
-        return {"call_id": call.id, "status": call.status}
+        return {
+            "call_id": call.id,
+            "status": call.status
+        }
             
     except Exception as e:
+        print(f"Error al crear llamada Vapi: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creando llamada con Vapi: {str(e)}"
