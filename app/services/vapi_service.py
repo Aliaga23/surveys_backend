@@ -93,7 +93,8 @@ async def crear_llamada_encuesta(
             "sobre {{campana}}. ¿Tienes unos minutos?"
         ),
         "context": contexto,
-        "analysisPlan": {"structuredDataSchema": schema}
+        "analysisPlan": {"structuredDataSchema": schema},
+        "voice": "juan-rime-ai" # Voz por defecto
         # Omitimos voice y model para usar los valores por defecto
     }
 
