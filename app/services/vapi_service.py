@@ -93,9 +93,8 @@ async def crear_llamada_encuesta(
             "sobre {{campana}}. ¿Tienes unos minutos?"
         ),
         "context": contexto,
-        "analysisPlan": {"structuredDataSchema": schema},
-        "voice": "juan-rime-ai",        # Voz en español de la lista permitida
-        "model": "gpt-4o"               # Modelo permitido de la lista
+        "analysisPlan": {"structuredDataSchema": schema}
+        # Omitimos voice y model para usar los valores por defecto
     }
 
     try:
