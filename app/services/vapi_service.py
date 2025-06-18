@@ -1,7 +1,6 @@
-import httpx
+from vapi import Vapi
 from typing import List, Dict, Any
 from fastapi import HTTPException, status
-
 from app.core.config import settings
 
 async def crear_llamada_encuesta(
@@ -13,13 +12,14 @@ async def crear_llamada_encuesta(
 ):
     """
     Crea una llamada con Vapi para realizar una encuesta telefónica
+    usando el SDK oficial de Vapi Server (vapi_server_sdk).
     """
     # Normalizar el teléfono (quitar +, espacios, etc.)
     telefono_limpio = telefono.replace("+", "").replace(" ", "")
     if not telefono_limpio.isdigit():
         raise ValueError(f"Formato de teléfono inválido: {telefono}")
-    
-    # Formatear las preguntas para el formato de Vapi
+
+    # Formatear las preguntas para enviar como metadata (opcional)
     preguntas_vapi = []
     for idx, pregunta in enumerate(preguntas):
         pregunta_vapi = {
@@ -28,46 +28,39 @@ async def crear_llamada_encuesta(
             "tipo": pregunta["tipo_pregunta_id"],
             "orden": idx + 1
         }
-        
-        # Añadir opciones si existen
         if "opciones" in pregunta and pregunta["opciones"]:
             pregunta_vapi["opciones"] = [
-                {"id": str(op["id"]), "texto": op["texto"]} 
+                {"id": str(op["id"]), "texto": op["texto"]}
                 for op in pregunta["opciones"]
             ]
-            
         preguntas_vapi.append(pregunta_vapi)
-    
-    # Construir el payload para Vapi
-    payload = {
-        "destinatario": {
-            "telefono": telefono_limpio,
-            "nombre": nombre_destinatario
-        },
-        "encuesta": {
-            "nombre": campana_nombre,
-            "preguntas": preguntas_vapi
-        },
-        "callback_url": f"{settings.API_BASE_URL}/vapi/webhook",
-        "entrega_id": str(entrega_id)
-    }
-    
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.VAPI_API_URL}/calls",
-                headers={
-                    "Authorization": f"Bearer {settings.VAPI_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=10.0
-            )
-            
-            response.raise_for_status()
-            return response.json()
-            
-    except httpx.HTTPError as e:
+        # Inicializar cliente del SDK de servidor
+        client = Vapi(token=settings.VAPI_API_KEY)
+
+        # Crear llamada
+        response = client.calls.create(
+            phoneNumberId=settings.VAPI_PHONE_NUMBER_ID,  # <- tu número de Vapi
+            assistantId=settings.VAPI_ASSISTANT_ID,        # <- tu asistente de Vapi
+            customer={
+                "number": f"+{telefono_limpio}",
+                "name": nombre_destinatario
+            },
+            metadata={
+                "entrega_id": entrega_id,
+                "campana": campana_nombre,
+                "preguntas": preguntas_vapi
+            },
+            webhookUrl=f"{settings.API_BASE_URL}/vapi/webhook"
+        )
+
+        return {
+            "call_id": response.id,
+            "status": response.status
+        }
+
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error creando llamada con Vapi: {str(e)}"

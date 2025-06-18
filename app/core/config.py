@@ -11,9 +11,10 @@ class Settings(BaseSettings):
     WHAPI_API_URL: str = "https://gate.whapi.cloud"
     OPENAI_API_KEY: str
     VAPI_API_URL: str 
-    VAPI_API_KEY: str = ""
+    VAPI_API_KEY: str
     API_BASE_URL: str 
-
+    VAPI_PHONE_NUMBER_ID: str
+    VAPI_ASSISTANT_ID: str
     class Config:
         env_file = ".env"
 
