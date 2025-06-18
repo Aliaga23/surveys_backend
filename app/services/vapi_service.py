@@ -107,7 +107,7 @@ async def crear_llamada_encuesta(
             ),
             "context": contexto,
             "analysisPlan": {"structuredDataSchema": schema},
-            "voice": "azure:es-ES-AlvaroNeural",  # Voz en español
+            "voice": "juan-rime-ai",  # Voz en español
             "model": "gpt-4o-mini"                # Versión más precisa según docs
         }
         
