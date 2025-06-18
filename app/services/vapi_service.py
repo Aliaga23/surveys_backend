@@ -43,7 +43,7 @@ async def crear_llamada_encuesta(
                 "number": f"+{telefono_limpio}",
                 "name": nombre_destinatario
             },
-            metadata={
+            custom_data={
                 "entrega_id": entrega_id,
                 "campana": campana_nombre,
                 "preguntas": preguntas_vapi
