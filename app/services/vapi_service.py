@@ -99,18 +99,7 @@ async def crear_llamada_encuesta(
                 "variableValues": {
                     "nombre": nombre_destinatario,
                     "campana": campana_nombre,
-                    "preguntas": preguntas_detalladas
-                },
-                "voice_settings": {
-                    "volume": 2.0,              # Aumenta el volumen
-                    "use_speaker_boost": True   # Mejora la claridad
-                },
-                "recognition_settings": {
-                    "endpointing": "aggressive",  # Detección más agresiva del fin del habla
-                    "boost": 1.3,                 # Amplifica la señal de entrada
-                    "sensitivity": "high",        # Mayor sensibilidad a la voz humana
-                    "energy_threshold": 0.4,      # Umbral más bajo para detectar voz
-                    "timeout_seconds": 3.0        # Espera más tiempo para respuestas
+                    "preguntas": preguntas_detalladas  # Incluye TODOS los datos técnicos
                 }
             }
         )
