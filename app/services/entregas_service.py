@@ -19,6 +19,7 @@ from app.schemas.conversacion_schema import Mensaje
 from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
 from app.services.conversacion_service import generar_siguiente_pregunta
 from app.services.shared_service import get_entrega_con_plantilla
+from app.services.vapi_service import crear_llamada_encuesta
 
 def create_entrega(
     db: Session, 
@@ -125,12 +126,6 @@ def mark_as_failed(db: Session, entrega_id: UUID, reason: str = None) -> Optiona
     entrega = get_entrega(db, entrega_id)
     if not entrega:
         return None
-    
-    if entrega.estado_id == ESTADO_RESPONDIDO:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No se puede marcar como fallida una entrega ya respondida"
-        )
     
     entrega.estado_id = ESTADO_FALLIDO
     db.commit()
@@ -302,6 +297,61 @@ async def create_entrega(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error iniciando conversación: {str(e)}"
+            )
+
+    # Si es canal Vapi (llamada telefónica)
+    elif payload.canal_id == 3:  # Vapi
+        try:
+            # Obtener información completa de la entrega con plantilla y preguntas
+            entrega = get_entrega_con_plantilla(db, entrega.id)
+            if not entrega.destinatario.telefono:
+                raise ValueError("El destinatario no tiene número de teléfono")
+            
+            # Extraer las preguntas y opciones de la plantilla
+            preguntas = []
+            if entrega.campana and entrega.campana.plantilla:
+                for pregunta in entrega.campana.plantilla.preguntas:
+                    pregunta_dict = {
+                        "id": str(pregunta.id),
+                        "texto": pregunta.texto,
+                        "tipo_pregunta_id": pregunta.tipo_pregunta_id,
+                        "obligatorio": pregunta.obligatorio,
+                        "opciones": []
+                    }
+                    
+                    # Si tiene opciones, incluirlas
+                    if hasattr(pregunta, 'opciones') and pregunta.opciones:
+                        pregunta_dict["opciones"] = [
+                            {"id": str(op.id), "texto": op.texto, "valor": op.valor} 
+                            for op in pregunta.opciones
+                        ]
+                    
+                    preguntas.append(pregunta_dict)
+            
+            # Crear la llamada con Vapi
+            nombre_destinatario = entrega.destinatario.nombre or "Estimado cliente"
+            campana_nombre = entrega.campana.nombre
+            
+            await crear_llamada_encuesta(
+                telefono=entrega.destinatario.telefono,
+                nombre_destinatario=nombre_destinatario,
+                campana_nombre=campana_nombre,
+                preguntas=preguntas,
+                entrega_id=str(entrega.id)
+            )
+            
+            # Marcar como enviada
+            entrega.estado_id = ESTADO_ENVIADO
+            entrega.enviado_en = datetime.now()
+            db.commit()
+            db.refresh(entrega)
+            
+        except Exception as e:
+            entrega.estado_id = ESTADO_FALLIDO
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error iniciando llamada: {str(e)}"
             )
 
     return entrega

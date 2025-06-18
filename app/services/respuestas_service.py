@@ -6,8 +6,8 @@ from fastapi import HTTPException, status
 from thefuzz import fuzz
 
 from app.core.constants import ESTADO_RESPONDIDO
-from app.models.survey import RespuestaEncuesta, RespuestaPregunta, EntregaEncuesta
-from app.schemas.respuestas_schema import RespuestaEncuestaCreate, RespuestaEncuestaUpdate
+from app.models.survey import PreguntaEncuesta, RespuestaEncuesta, RespuestaPregunta, EntregaEncuesta
+from app.schemas.respuestas_schema import RespuestaEncuestaCreate, RespuestaEncuestaUpdate, RespuestaPreguntaCreate
 from app.services.shared_service import get_entrega_con_plantilla, mark_as_responded
 
 def validate_entrega_status(db: Session, entrega_id: UUID) -> EntregaEncuesta:
@@ -118,95 +118,134 @@ async def crear_respuesta_encuesta(
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega:
         raise ValueError("Entrega no encontrada")
-
-    # Inicializar respuestas
-    respuestas_preguntas = []
-    preguntas = {p.id: p for p in entrega.campana.plantilla.preguntas}
-    puntuacion_total = 0
-    count_preguntas = 0
-
-    # Procesar el historial para extraer respuestas
-    for mensaje in historial:
-        if mensaje["role"] == "user":
-            pregunta_actual_id = entrega.conversacion.pregunta_actual_id
-            if pregunta_actual_id not in preguntas:
-                continue
-
-            pregunta = preguntas[pregunta_actual_id]
-            respuesta = {
-                "pregunta_id": pregunta.id,
-                "tipo_pregunta_id": pregunta.tipo_pregunta_id
-            }
-
-            # Procesar según tipo de pregunta
-            if pregunta.tipo_pregunta_id == 1:  # Texto
-                respuesta["texto"] = mensaje["content"]
-            
-            elif pregunta.tipo_pregunta_id == 2:  # Número
-                try:
-                    numero = float(mensaje["content"])
-                    respuesta["numero"] = numero
-                    puntuacion_total += numero
-                    count_preguntas += 1
-                except ValueError:
-                    continue
-            
-            elif pregunta.tipo_pregunta_id == 3:  # Select
-                # Buscar la opción que mejor coincida con la respuesta
-                mejor_opcion = None
-                mejor_coincidencia = 0
-                for opcion in pregunta.opciones:
-                    coincidencia = fuzz.ratio(
-                        mensaje["content"].lower(), 
-                        opcion.texto.lower()
-                    )
-                    if coincidencia > mejor_coincidencia:
-                        mejor_coincidencia = coincidencia
-                        mejor_opcion = opcion
-                
-                if mejor_opcion and mejor_coincidencia > 70:
-                    respuesta["opcion_id"] = mejor_opcion.id
-            
-            elif pregunta.tipo_pregunta_id == 4:  # Multiselect
-                opciones_seleccionadas = []
-                for opcion in pregunta.opciones:
-                    if fuzz.partial_ratio(
-                        mensaje["content"].lower(), 
-                        opcion.texto.lower()
-                    ) > 70:
-                        opciones_seleccionadas.append(opcion.id)
-                
-                if opciones_seleccionadas:
-                    respuesta["opcion_ids"] = opciones_seleccionadas
-
-            respuestas_preguntas.append(respuesta)
-
-    # Calcular puntuación promedio para preguntas numéricas
-    puntuacion_final = (
-        puntuacion_total / count_preguntas 
-        if count_preguntas > 0 
-        else None
-    )
-
-    # Crear la respuesta
-    respuesta = RespuestaEncuesta(
-        entrega_id=entrega_id,
-        puntuacion=puntuacion_final,
-        raw_payload={"historial": historial}
-    )
-    db.add(respuesta)
     
-    # Crear respuestas individuales
-    for resp in respuestas_preguntas:
-        pregunta_resp = RespuestaPregunta(
-            respuesta_id=respuesta.id,
-            **resp
-        )
-        db.add(pregunta_resp)
-
+    # Obtener todas las preguntas de la plantilla ordenadas
+    preguntas = (
+        db.query(PreguntaEncuesta)
+        .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
+        .order_by(PreguntaEncuesta.orden)
+        .all()
+    )
+    
+    if not preguntas:
+        raise ValueError("No hay preguntas en la plantilla")
+    
+    # Mapear preguntas por ID para acceso fácil
+    preguntas_map = {p.id: p for p in preguntas}
+    
+    # Identificar el inicio de cada pregunta en el historial
+    preguntas_indices = []
+    pregunta_actual = None
+    
+    for i, msg in enumerate(historial):
+        if msg["role"] == "assistant":
+            # Buscar qué pregunta podría estar en este mensaje
+            mensaje_texto = msg["content"].lower()
+            for p in preguntas:
+                # Si el texto de la pregunta está en el mensaje del asistente
+                if p.texto.lower() in mensaje_texto:
+                    pregunta_actual = p
+                    preguntas_indices.append((i, p.id))
+                    break
+    
+    # Preparar estructura para las respuestas
+    respuestas = []
+    puntuacion_total = 0
+    count_preguntas_numericas = 0
+    
+    # Procesar cada pregunta identificada y su respuesta
+    for i, (msg_idx, pregunta_id) in enumerate(preguntas_indices):
+        pregunta = preguntas_map[pregunta_id]
+        
+        # Buscar la respuesta del usuario (primer mensaje "user" después del mensaje del asistente)
+        respuesta_texto = None
+        for j in range(msg_idx + 1, len(historial)):
+            if historial[j]["role"] == "user":
+                respuesta_texto = historial[j]["content"]
+                break
+        
+        if not respuesta_texto:
+            continue  # No hay respuesta para esta pregunta
+        
+        # Base de la respuesta con ID de pregunta y tipo
+        respuesta_item = {
+            "pregunta_id": str(pregunta.id),
+            "tipo_pregunta_id": pregunta.tipo_pregunta_id
+        }
+        
+        # Procesar según tipo de pregunta
+        if pregunta.tipo_pregunta_id == 1:  # Texto
+            respuesta_item["texto"] = respuesta_texto
+        
+        elif pregunta.tipo_pregunta_id == 2:  # Número
+            try:
+                numero = float(respuesta_texto.strip())
+                respuesta_item["numero"] = numero
+                puntuacion_total += numero
+                count_preguntas_numericas += 1
+            except ValueError:
+                # Si no es número válido, guardar como texto
+                respuesta_item["texto"] = respuesta_texto
+        
+        elif pregunta.tipo_pregunta_id == 3:  # Select
+            # Buscar la opción que mejor coincide
+            mejor_opcion = None
+            mejor_score = 0
+            for opcion in pregunta.opciones:
+                score = fuzz.ratio(respuesta_texto.lower(), opcion.texto.lower())
+                if score > mejor_score:
+                    mejor_score = score
+                    mejor_opcion = opcion
+            
+            if mejor_opcion and mejor_score > 70:
+                respuesta_item["opcion_id"] = str(mejor_opcion.id)
+        
+        elif pregunta.tipo_pregunta_id == 4:  # Multiselect
+            # Para multiselect, intentamos encontrar la mejor opción también
+            # Aunque idealmente deberíamos identificar múltiples opciones
+            mejor_opcion = None
+            mejor_score = 0
+            for opcion in pregunta.opciones:
+                score = fuzz.ratio(respuesta_texto.lower(), opcion.texto.lower())
+                if score > mejor_score:
+                    mejor_score = score
+                    mejor_opcion = opcion
+            
+            if mejor_opcion and mejor_score > 70:
+                respuesta_item["opcion_id"] = str(mejor_opcion.id)
+        
+        respuestas.append(respuesta_item)
+    
+    # Calcular puntuación promedio para preguntas numéricas
+    puntuacion_promedio = None
+    if count_preguntas_numericas > 0:
+        puntuacion_promedio = round(puntuacion_total / count_preguntas_numericas, 1)
+    
+    # Crear datos para la respuesta
+    respuesta_datos = {
+        "entrega_id": str(entrega_id),
+        "puntuacion": puntuacion_promedio,
+        "respuestas": respuestas,
+    }
+    
+    # Crear respuesta en la base de datos usando el esquema adecuado
+    respuesta_schema = RespuestaEncuestaCreate(
+        puntuacion=puntuacion_promedio,
+        raw_payload={"historial": historial},
+        respuestas_preguntas=[
+            RespuestaPreguntaCreate(
+                pregunta_id=UUID(r["pregunta_id"]),
+                texto=r.get("texto"),
+                numero=r.get("numero"),
+                opcion_id=UUID(r["opcion_id"]) if r.get("opcion_id") else None
+            ) for r in respuestas
+        ]
+    )
+    
+    # Crear la respuesta en la base de datos
+    respuesta = create_respuesta(db, entrega_id, respuesta_schema)
+    
     # Marcar la entrega como respondida
     mark_as_responded(db, entrega_id)
     
-    db.commit()
-    db.refresh(respuesta)
     return respuesta
