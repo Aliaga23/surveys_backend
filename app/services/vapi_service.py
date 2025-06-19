@@ -58,7 +58,6 @@ def formatear_preguntas_para_prompt(preguntas: List[Dict]) -> str:
     preguntas_formateadas += "   - Para preguntas tipo 2: Incluye 'numero' con el valor numérico\n"
     preguntas_formateadas += "   - Para preguntas tipo 3: Incluye 'opcion_id' con el ID exacto de la opción seleccionada\n"
     preguntas_formateadas += "   - Para preguntas tipo 4: Incluye 'opcion_id' como array de IDs de las opciones seleccionadas\n"
-    preguntas_formateadas += "2. Calcula la puntuación promedio de todas las respuestas numéricas\n"
     
     return preguntas_formateadas
 

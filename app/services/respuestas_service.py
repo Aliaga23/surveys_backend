@@ -40,10 +40,9 @@ def create_respuesta(
     # Validar estado de la entrega
     entrega = validate_entrega_status(db, entrega_id)
     
-    # Crear la respuesta principal
+    # Crear la respuesta principal (sin puntuación)
     respuesta = RespuestaEncuesta(
         entrega_id=entrega_id,
-        puntuacion=payload.puntuacion,
         raw_payload=payload.raw_payload
     )
     db.add(respuesta)
@@ -150,8 +149,6 @@ async def crear_respuesta_encuesta(
     
     # Preparar estructura para las respuestas
     respuestas = []
-    puntuacion_total = 0
-    count_preguntas_numericas = 0
     
     # Procesar cada pregunta identificada y su respuesta
     for i, (msg_idx, pregunta_id) in enumerate(preguntas_indices):
@@ -181,8 +178,6 @@ async def crear_respuesta_encuesta(
             try:
                 numero = float(respuesta_texto.strip())
                 respuesta_item["numero"] = numero
-                puntuacion_total += numero
-                count_preguntas_numericas += 1
             except ValueError:
                 # Si no es número válido, guardar como texto
                 respuesta_item["texto"] = respuesta_texto
@@ -216,21 +211,14 @@ async def crear_respuesta_encuesta(
         
         respuestas.append(respuesta_item)
     
-    # Calcular puntuación promedio para preguntas numéricas
-    puntuacion_promedio = None
-    if count_preguntas_numericas > 0:
-        puntuacion_promedio = round(puntuacion_total / count_preguntas_numericas, 1)
-    
     # Crear datos para la respuesta
     respuesta_datos = {
         "entrega_id": str(entrega_id),
-        "puntuacion": puntuacion_promedio,
         "respuestas": respuestas,
     }
     
     # Crear respuesta en la base de datos usando el esquema adecuado
     respuesta_schema = RespuestaEncuestaCreate(
-        puntuacion=puntuacion_promedio,
         raw_payload={"historial": historial},
         respuestas_preguntas=[
             RespuestaPreguntaCreate(

@@ -21,14 +21,13 @@ class RespuestaPreguntaOut(RespuestaPreguntaBase):
     model_config = {"from_attributes": True}
 
 class RespuestaEncuestaBase(BaseModel):
-    puntuacion: Optional[Decimal] = None
     raw_payload: Optional[dict] = None
 
 class RespuestaEncuestaCreate(RespuestaEncuestaBase):
     respuestas_preguntas: List[RespuestaPreguntaCreate]
 
 class RespuestaEncuestaUpdate(BaseModel):
-    puntuacion: Optional[Decimal] = None
+    pass  # Mantén 'pass' si no quedan otros campos
 
 class RespuestaEncuestaOut(RespuestaEncuestaBase):
     id: UUID

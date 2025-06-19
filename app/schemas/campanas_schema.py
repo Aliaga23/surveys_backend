@@ -42,7 +42,6 @@ class RespuestaPreguntaInResponse(BaseModel):
 class RespuestaInResponse(BaseModel):
     id: UUID
     entrega_id: UUID
-    puntuacion: Optional[Decimal] = None
     recibido_en: datetime
     respuestas_preguntas: List[RespuestaPreguntaInResponse] = []
 

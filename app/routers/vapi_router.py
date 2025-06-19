@@ -68,7 +68,6 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
         
         # Procesar respuestas - usar exactamente los IDs proporcionados
         respuestas_raw = structured_data.get("respuestas_preguntas", [])
-        puntuacion = structured_data.get("puntuacion")
         
         # Crear las respuestas a preguntas
         respuestas_preguntas = []
@@ -77,7 +76,6 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
             if not pregunta_id:
                 continue
                 
-            # Asegurarnos de usar exactamente el ID proporcionado
             respuesta_pregunta = {
                 "pregunta_id": UUID(pregunta_id),
                 "texto": resp.get("texto"),
@@ -87,9 +85,8 @@ async def procesar_respuestas_vapi(payload: dict, db: Session):
             
             respuestas_preguntas.append(RespuestaPreguntaCreate(**respuesta_pregunta))
         
-        # Crear la respuesta de la encuesta
+        # Crear la respuesta de la encuesta (sin puntuación)
         respuesta_schema = RespuestaEncuestaCreate(
-            puntuacion=puntuacion,
             raw_payload=payload,
             respuestas_preguntas=respuestas_preguntas
         )

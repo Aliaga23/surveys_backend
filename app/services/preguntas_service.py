@@ -53,21 +53,9 @@ def update_pregunta(
         return None
 
     # Actualizar campos de la pregunta
-    update_data = payload.model_dump(exclude={'opciones'}, exclude_unset=True)
+    update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(pregunta, field, value)
-    
-    # Si hay opciones nuevas, eliminar las anteriores y crear las nuevas
-    if payload.opciones is not None:
-        # Eliminar opciones existentes
-        db.query(OpcionEncuesta).filter(
-            OpcionEncuesta.pregunta_id == pregunta_id
-        ).delete()
-        
-        # Crear nuevas opciones
-        for opcion in payload.opciones:
-            db_opcion = OpcionEncuesta(**opcion.model_dump(), pregunta_id=pregunta_id)
-            db.add(db_opcion)
     
     db.commit()
     db.refresh(pregunta)
