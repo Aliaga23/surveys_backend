@@ -6,6 +6,7 @@ import stripe
 from app.core.database import get_db
 from app.core.security import get_admin_user, get_empresa_user
 from app.core.config import settings
+from datetime import datetime
 
 from app.services.subscription import (
     get_plan, list_planes, create_plan, update_plan, delete_plan,
@@ -164,6 +165,45 @@ def iniciar_suscripcion_stripe(
     from app.services.stripe_service import crear_suscripcion_stripe
     return crear_suscripcion_stripe(db, suscriptor_id, plan_id)
 
+@router.post("/stripe-checkout")
+def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depends(get_db)):
+    suscriptor = db.query(Suscriptor).filter_by(id=suscriptor_id).first()
+    plan = db.query(PlanSuscripcion).filter_by(id=plan_id).first()
+    if not suscriptor or not plan:
+        raise HTTPException(status_code=404, detail="Suscriptor o plan no encontrado")
+
+    if not suscriptor.stripe_customer_id:
+        customer = stripe.Customer.create(
+            email=suscriptor.email,
+            name=suscriptor.nombre
+        )
+        suscriptor.stripe_customer_id = customer.id
+        db.commit()
+
+    checkout_session = stripe.checkout.Session.create(
+        customer=suscriptor.stripe_customer_id,
+        line_items=[{
+            'price': plan.stripe_price_id,
+            'quantity': 1,
+        }],
+        mode='subscription',
+        success_url='https://example.com/success?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url='https://example.com/cancel',
+    )
+
+    # Registrar en la base de datos
+    nueva_suscripcion = SuscripcionSuscriptor(
+        suscriptor_id=suscriptor.id,
+        plan_id=plan.id,
+        inicia_en=datetime.utcnow(),
+        estado="pendiente",
+        stripe_subscription_id=None  # aún no lo tenemos, llegará con el webhook
+    )
+    db.add(nueva_suscripcion)
+    db.commit()
+
+    return {"checkout_url": checkout_session.url}
+
 
 # ---------------- STRIPE WEBHOOK ----------------
 
@@ -183,13 +223,27 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     print(f"Evento recibido: {event['type']}")
 
     try:
-        if event["type"] == "invoice.paid":
+        if event["type"] == "checkout.session.completed":
+            session = event["data"]["object"]
+            stripe_sub_id = session.get("subscription")
+            customer_id = session.get("customer")
+
+            # Buscar la suscripción pendiente
+            suscripcion = db.query(SuscripcionSuscriptor).join(Suscriptor).filter(
+                SuscripcionSuscriptor.stripe_subscription_id == None,
+                Suscriptor.stripe_customer_id == customer_id
+            ).first()
+
+            if suscripcion and stripe_sub_id:
+                suscripcion.stripe_subscription_id = stripe_sub_id
+                suscripcion.estado = "activo"
+                db.commit()
+
+        elif event["type"] == "invoice.paid":
             stripe_sub_id = event["data"]["object"]["subscription"]
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "activo"
-                suscriptor = db.query(Suscriptor).filter_by(id=suscripcion.suscriptor_id).first()
-                suscriptor.estado = "activo"
                 db.commit()
 
         elif event["type"] == "customer.subscription.deleted":
@@ -197,8 +251,6 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "inactivo"
-                suscriptor = db.query(Suscriptor).filter_by(id=suscripcion.suscriptor_id).first()
-                suscriptor.estado = "inactivo"
                 db.commit()
 
     except Exception as e:
