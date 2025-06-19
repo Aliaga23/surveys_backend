@@ -12,8 +12,9 @@ class Suscriptor(Base):
     telefono = Column(Text)
     password_hash = Column(Text, nullable=False)
     rol_id = Column(Integer, ForeignKey("rol.id"), nullable=False, default=1)
-    estado = Column(Text, default="activo")
+    estado = Column(Text, default="inactivo")
     creado_en = Column(TIMESTAMP(timezone=True), server_default="now()")
+    stripe_customer_id = Column(Text, nullable=True)
 
     rol = relationship("Rol")
     usuarios = relationship("CuentaUsuario", back_populates="suscriptor")

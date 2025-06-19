@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     API_BASE_URL: str 
     VAPI_PHONE_NUMBER_ID: str
     VAPI_ASSISTANT_ID: str
+    STRIPE_SECRET_KEY: str
+    STRIPE_PUBLIC_KEY: str
+    STRIPE_WEBHOOK_SECRET: str
     class Config:
         env_file = ".env"
 
