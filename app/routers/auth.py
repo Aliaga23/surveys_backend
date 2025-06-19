@@ -119,14 +119,11 @@ def login(
     password = credentials.password
 
     user = db.query(Administrador).filter_by(email=email).first()
-    # si no existe, pruebo Suscriptor
     if not user:
         user = db.query(Suscriptor).filter_by(email=email).first()
-    # si aÃƒÂºn no existe, pruebo CuentaUsuario
     if not user:
         user = db.query(CuentaUsuario).filter_by(email=email).first()
 
-    # validaciÃƒÂ³n de credenciales
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
