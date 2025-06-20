@@ -1,11 +1,11 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 from datetime import datetime
 from openai import AsyncOpenAI
 from thefuzz import fuzz
 
-from app.models.survey import CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta, PlantillaEncuesta, PreguntaEncuesta
+from app.models.survey import CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta, PlantillaEncuesta, PreguntaEncuesta, RespuestaTemp
 from app.schemas.conversacion_schema import ConversacionCreate, Mensaje
 from app.core.config import settings
 from app.services.respuestas_service import crear_respuesta_encuesta
@@ -38,7 +38,7 @@ async def generar_siguiente_pregunta(
     tipo_contexto = {
         1: "Esta es una pregunta abierta. Sé amable y natural al preguntar.",
         2: "Esta pregunta requiere una respuesta numérica del 1 al 10. Pídelo amablemente.",
-        3: "Esta pregunta requiere seleccionar una opción específica. Menciona que debe elegir una opción pero no enumeres las opciones.",
+        3: "Esta pregunta requiere seleccionar una opción específica. Menciona que debe elegir una opción pero solo una",
         4: "Esta pregunta permite seleccionar múltiples opciones. Menciona que puede seleccionar varias opciones pero no las enumeres."
     }
     
@@ -73,6 +73,13 @@ async def procesar_respuesta(
     
     if not conversacion:
         raise ValueError("Conversación no encontrada")
+    
+    # Si la conversación ya está marcada como completada, no procesar más respuestas
+    if conversacion.completada:
+        return {
+            "completada": True,
+            "mensaje": "Esta encuesta ya ha sido completada. Gracias por tu participación."
+        }
 
     # Agregar respuesta al historial
     nuevo_mensaje = {"role": "user", "content": respuesta_usuario, "timestamp": datetime.now().isoformat()}
@@ -150,6 +157,16 @@ async def procesar_respuesta(
             siguiente_pregunta = preguntas_plantilla[i + 1]
             break
 
+    # Guardar respuesta individual inmediatamente después de validar
+    # Esto permite guardar cada respuesta aunque la encuesta no se complete totalmente
+    await guardar_respuesta_individual(
+        db, 
+        conversacion.entrega_id, 
+        pregunta_actual.id, 
+        pregunta_actual.tipo_pregunta_id,
+        valor_procesado
+    )
+
     if siguiente_pregunta:
         # Generar texto de la siguiente pregunta
         texto_siguiente = await generar_siguiente_pregunta(
@@ -191,3 +208,68 @@ async def procesar_respuesta(
             "completada": True,
             "respuesta_id": str(respuesta.id)
         }
+
+async def guardar_respuesta_individual(
+    db: Session,
+    entrega_id: UUID,
+    pregunta_id: UUID,
+    tipo_pregunta_id: int,
+    valor_procesado: Any
+) -> None:
+    """
+    Guarda una respuesta individual en la tabla temporal de respuestas
+    o la actualiza si ya existe para la misma entrega y pregunta
+    """
+    # Buscar si ya existe una respuesta para esta pregunta y entrega
+    respuesta_existente = (
+        db.query(RespuestaTemp)
+        .filter(
+            RespuestaTemp.entrega_id == entrega_id,
+            RespuestaTemp.pregunta_id == pregunta_id
+        )
+        .first()
+    )
+    
+    # Si existe, actualizar
+    if respuesta_existente:
+        if tipo_pregunta_id == 1:  # Texto
+            respuesta_existente.texto = valor_procesado
+        elif tipo_pregunta_id == 2:  # Número
+            respuesta_existente.numero = valor_procesado
+        elif tipo_pregunta_id == 3:  # Select
+            respuesta_existente.opcion_id = valor_procesado
+        elif tipo_pregunta_id == 4:  # Multiselect
+            # Para multiselect, borramos las respuestas anteriores y creamos nuevas
+            db.query(RespuestaTemp).filter(
+                RespuestaTemp.entrega_id == entrega_id,
+                RespuestaTemp.pregunta_id == pregunta_id
+            ).delete()
+            
+            for opcion_id in valor_procesado:
+                nueva_respuesta = RespuestaTemp(
+                    entrega_id=entrega_id,
+                    pregunta_id=pregunta_id,
+                    opcion_id=opcion_id
+                )
+                db.add(nueva_respuesta)
+    else:
+        # Si no existe, crear nueva respuesta
+        if tipo_pregunta_id in [1, 2, 3]:  # Texto, Número o Select
+            nueva_respuesta = RespuestaTemp(
+                entrega_id=entrega_id,
+                pregunta_id=pregunta_id,
+                texto=valor_procesado if tipo_pregunta_id == 1 else None,
+                numero=valor_procesado if tipo_pregunta_id == 2 else None,
+                opcion_id=valor_procesado if tipo_pregunta_id == 3 else None
+            )
+            db.add(nueva_respuesta)
+        elif tipo_pregunta_id == 4:  # Multiselect
+            for opcion_id in valor_procesado:
+                nueva_respuesta = RespuestaTemp(
+                    entrega_id=entrega_id,
+                    pregunta_id=pregunta_id,
+                    opcion_id=opcion_id
+                )
+                db.add(nueva_respuesta)
+    
+    db.commit()

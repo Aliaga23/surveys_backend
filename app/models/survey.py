@@ -142,3 +142,22 @@ class VapiCallRelation(Base):
     
     # Relación
     entrega = relationship("EntregaEncuesta", back_populates="vapi_calls")
+
+class RespuestaTemp(Base):
+    """
+    Modelo temporal para guardar respuestas durante la conversación
+    """
+    __tablename__ = "respuesta_temp"
+    
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entrega_id = Column(PGUUID(as_uuid=True), ForeignKey("entrega_encuesta.id", ondelete="CASCADE"), nullable=False)
+    pregunta_id = Column(PGUUID(as_uuid=True), ForeignKey("pregunta_encuesta.id", ondelete="CASCADE"), nullable=False)
+    texto = Column(Text, nullable=True)
+    numero = Column(Numeric, nullable=True)
+    opcion_id = Column(PGUUID(as_uuid=True), ForeignKey("opcion_encuesta.id", ondelete="SET NULL"), nullable=True)
+    creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    
+    # Índice para búsquedas rápidas
+    __table_args__ = (
+        UniqueConstraint('entrega_id', 'pregunta_id', 'opcion_id', name='unique_respuesta_temp'),
+    )

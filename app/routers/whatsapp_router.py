@@ -4,6 +4,7 @@ import logging
 import re
 import json
 from typing import Dict
+from sqlalchemy import or_
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -11,6 +12,10 @@ from app.models.survey import ConversacionEncuesta
 from app.services.conversacion_service import procesar_respuesta
 from app.services.entregas_service import get_entrega_by_destinatario, iniciar_conversacion_whatsapp
 from app.services.whatsapp_service import enviar_mensaje_whatsapp
+from app.models.survey import EntregaEncuesta, ConversacionEncuesta
+from app.models.survey import RespuestaTemp
+from app.models.survey import Destinatario
+from app.core.constants import ESTADO_RESPONDIDO
 
 logger = logging.getLogger(__name__)
 
@@ -24,167 +29,173 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     """
     Webhook para recibir mensajes de Whapi
     """
-    # Este es el primer paso para depuración
-    print("Webhook recibido en /whatsapp/webhook")
-    
-    # Leer el cuerpo de la solicitud
-    body = await request.body()
-    body_str = body.decode('utf-8')
-    
-    # Imprimir el cuerpo completo sin procesar
-    print(f"Cuerpo del webhook: {body_str}")
-    
     try:
-        payload = json.loads(body_str)
-        # Imprimir para depuración
-        print(f"Payload JSON: {payload}")
-        logger.info(f"Webhook recibido: {json.dumps(payload, indent=2)}")
-    except json.JSONDecodeError as e:
-        print(f"Error decodificando JSON: {e}")
-        return {"success": False, "error": "Invalid JSON"}
-    
-    # Verificar primero si es una verificación de webhook
-    if payload.get("hubVerificationToken"):
-        if payload["hubVerificationToken"] == settings.WHAPI_TOKEN:
-            logger.info("Webhook verificado correctamente")
-            return {"success": True, "message": "Webhook verified"}
-        return {"success": False, "error": "Invalid verification token"}
-    
-    # Según la documentación, verificar si es un mensaje entrante
-    if not payload.get("messages") or not isinstance(payload["messages"], list) or len(payload["messages"]) == 0:
-        print("No hay mensajes en el payload")
-        return {"success": True, "message": "No messages"}
-    
-    # Obtener el primer mensaje (pueden venir varios en batch)
-    message = payload["messages"][0]
-    
-    # Verificar si es un mensaje de texto
-    if message.get("type") != "text":
-        print(f"Tipo de mensaje no es texto: {message.get('type')}")
-        return {"success": True, "message": "Not a text message"}
-    
-    # Extraer la información importante según la estructura de Whapi
-    chat_id = message.get("from", "")  # Formato: 1234567890@c.us
-
-    # Usar solo el número sin el sufijo @c.us para las búsquedas
-    numero = chat_id.split("@")[0]
-    
-    # Extraer el texto del mensaje según la estructura de Whapi
-    texto = message.get("text", {}).get("body", "")
-    if not texto:
-        print("Mensaje vacío")
-        return {"success": True, "message": "Empty message"}
-    
-    print(f"Mensaje procesado - De: {numero}, Texto: {texto}")
-    logger.info(f"Mensaje recibido de {numero}: {texto}")
-    
-    # A partir de aquí sigue el procesamiento de la conversación
-    # Obtener estado actual de la conversación
-    estado_actual = conversaciones_estado.get(chat_id, 'esperando_confirmacion')
-    print(f"Estado actual: {estado_actual}")
-    
-    # Buscar entrega activa para este número
-    entrega = get_entrega_by_destinatario(db, telefono=numero)
-    if not entrega:
-        print(f"No se encontró entrega para el número: {numero}")
-        await enviar_mensaje_whatsapp(
-            chat_id,
-            "Hola 👋 Lo siento, no encontré ninguna encuesta pendiente para este número."
-        )
-        return {"success": True, "message": "No entrega found"}
-    
-    print(f"Entrega encontrada ID: {entrega.id}")
-    
-    # Manejar el flujo según el estado de la conversación
-    if estado_actual == 'esperando_confirmacion':
-        respuesta_normalizada = texto.strip().lower()
+        # Obtener el cuerpo del mensaje
+        body = await request.json()
         
-        # Si confirma iniciar la encuesta
-        if re.match(r'(s[iíì]|yes|ok|okay|vale|claro|por supuesto|adelante|iniciar)', respuesta_normalizada):
-            print("Usuario confirmó iniciar la encuesta")
-            # Iniciar la conversación de la encuesta
-            await iniciar_conversacion_whatsapp(db, entrega.id)
+        # Extraer datos del mensaje
+        chat_id = body.get("waId")
+        texto = body.get("text", "").strip()
+        
+        # Verificar datos básicos
+        if not chat_id or not texto:
+            return {"success": False, "message": "Datos incompletos"}
+        
+        # Normalizar número de teléfono (quitar @c.us si existe)
+        if '@' in chat_id:
+            chat_id = chat_id.split('@')[0]
+        
+        # Obtener el estado actual de la conversación
+        estado_actual = conversaciones_estado.get(chat_id, 'sin_estado')
+        
+        # Buscar si hay una entrega pendiente para este número
+        entrega = None
+        conversacion = None
+        
+        if estado_actual != 'sin_estado':
+            # Buscar la entrega asociada al número
+            entrega = (
+                db.query(EntregaEncuesta)
+                .join(Destinatario)
+                .filter(
+                    or_(
+                        Destinatario.telefono == chat_id,
+                        Destinatario.telefono == f"{chat_id}@c.us"
+                    )
+                )
+                .order_by(EntregaEncuesta.enviado_en.desc())
+                .first()
+            )
             
-            # Actualizar el estado
-            conversaciones_estado[chat_id] = 'encuesta_en_progreso'
-            print(f"Estado actualizado: {conversaciones_estado[chat_id]}")
-            return {"success": True, "message": "Survey started"}
+            if entrega and estado_actual == 'encuesta_en_progreso':
+                # Buscar la conversación activa
+                conversacion = (
+                    db.query(ConversacionEncuesta)
+                    .filter(ConversacionEncuesta.entrega_id == entrega.id)
+                    .first()
+                )
         
-        # Si no quiere iniciar ahora
-        elif re.match(r'(no|nop|después|luego|más tarde)', respuesta_normalizada):
-            print("Usuario declinó iniciar la encuesta")
-            mensaje_despedida = "Entendido. Puedes responder en cualquier momento escribiendo 'INICIAR'. ¡Que tengas un buen día!"
-            await enviar_mensaje_whatsapp(chat_id, mensaje_despedida)
-            return {"success": True, "message": "Survey declined"}
-        
-        # Si la respuesta no es clara
-        else:
-            print("Respuesta no clara, pidiendo confirmación")
-            mensaje_aclaracion = "Por favor, responde 'SI' para comenzar la encuesta ahora o 'NO' para hacerlo más tarde."
-            await enviar_mensaje_whatsapp(chat_id, mensaje_aclaracion)
-            return {"success": True, "message": "Confirmation requested"}
-    
-    # Si la encuesta ya está en progreso, procesar la respuesta
-    elif estado_actual == 'encuesta_en_progreso':
-        print("Procesando respuesta para encuesta en progreso")
-        # Buscar la conversación de manera explícita
-        conversacion = (
-            db.query(ConversacionEncuesta)
-            .filter(ConversacionEncuesta.entrega_id == entrega.id)
-            .first()
-        )
-        
-        if not conversacion:
-            print(f"No hay conversación para la entrega {entrega.id}, iniciando una nueva")
-            await iniciar_conversacion_whatsapp(db, entrega.id)
-            return {"success": True, "message": "New conversation started"}
-        
-        print(f"Conversación encontrada ID: {conversacion.id}")
-        
-        # Ahora podemos procesar la respuesta
-        resultado = await procesar_respuesta(db, conversacion.id, texto)
-        
-        if "error" in resultado:
-            await enviar_mensaje_whatsapp(chat_id, resultado["error"])
-            return {"success": True, "message": "Error handled"}
-        else:
-            # Si se completó la encuesta
+        # Manejar el flujo según el estado de la conversación
+        if estado_actual == 'esperando_confirmacion':
+            respuesta_normalizada = texto.strip().lower()
+            
+            # Si confirma iniciar la encuesta
+            if re.match(r'(s[iíì]|yes|ok|okay|vale|claro|por supuesto|adelante|iniciar)', respuesta_normalizada):
+                print("Usuario confirmó iniciar la encuesta")
+                # Iniciar la conversación de la encuesta
+                await iniciar_conversacion_whatsapp(db, entrega.id)
+                
+                # Actualizar el estado
+                conversaciones_estado[chat_id] = 'encuesta_en_progreso'
+                return {"success": True, "message": "Survey started"}
+            
+            # Si no quiere iniciar ahora
+            elif re.match(r'(no|nop|después|luego|más tarde)', respuesta_normalizada):
+                print("Usuario declinó iniciar la encuesta")
+                mensaje_despedida = "Entendido. Puedes responder en cualquier momento escribiendo 'INICIAR'. ¡Que tengas un buen día!"
+                await enviar_mensaje_whatsapp(chat_id, mensaje_despedida)
+                return {"success": True, "message": "Survey declined"}
+            
+            # Si la respuesta no es clara
+            else:
+                print("Respuesta no clara, pidiendo confirmación")
+                mensaje_aclaracion = "Por favor, responde 'SI' para comenzar la encuesta ahora o 'NO' para hacerlo más tarde."
+                await enviar_mensaje_whatsapp(chat_id, mensaje_aclaracion)
+                return {"success": True, "message": "Clarification requested"}
+            
+        elif estado_actual == 'encuesta_en_progreso' and conversacion:
+            print(f"Procesando respuesta para encuesta en progreso: {texto}")
+            
+            # Verificar si la conversación ya está completada
+            if conversacion.completada:
+                mensaje = "Esta encuesta ya ha sido completada. Gracias por tu participación."
+                await enviar_mensaje_whatsapp(chat_id, mensaje)
+                # Eliminar el estado de la conversación
+                conversaciones_estado.pop(chat_id, None)
+                return {"success": True, "message": "Survey already completed"}
+                
+            # Procesar la respuesta
+            resultado = await procesar_respuesta(db, conversacion.id, texto)
+            
+            # Si hay error, enviar mensaje de error y mantener el estado actual
+            if "error" in resultado:
+                print(f"Error en respuesta: {resultado['error']}")
+                await enviar_mensaje_whatsapp(chat_id, resultado["error"])
+                return {"success": True, "message": "Error handled"}
+            
+            # Si la encuesta está completada, enviar mensaje final y limpiar el estado
             if resultado.get("completada", False):
-                # Enviar mensaje de agradecimiento
+                print("Encuesta completada")
                 mensaje_final = "¡Muchas gracias por completar la encuesta! Tus respuestas han sido registradas correctamente."
                 
-                # Adicionalmente enviar la ID de la respuesta
                 if resultado.get("respuesta_id"):
                     mensaje_final += f"\n\nCódigo de referencia: {resultado['respuesta_id'][:8]}"
-                    
+                
                 await enviar_mensaje_whatsapp(chat_id, mensaje_final)
                 
                 # Eliminar el estado de la conversación
                 conversaciones_estado.pop(chat_id, None)
                 
-                return {
-                    "success": True, 
-                    "message": "Survey completed", 
-                    "respuesta_id": resultado.get("respuesta_id")
-                }
+                return {"success": True, "message": "Survey completed", "respuesta_id": resultado.get("respuesta_id")}
+            
+            # Si hay siguiente pregunta, enviarla con las opciones si es necesario
+            print(f"Enviando siguiente pregunta: {resultado['siguiente_pregunta'][:30]}...")
+            
+            if resultado.get("opciones"):
+                await enviar_mensaje_whatsapp(chat_id, resultado["siguiente_pregunta"], resultado["opciones"])
             else:
-                # Enviar siguiente pregunta con opciones si existen
-                await enviar_mensaje_whatsapp(
-                    chat_id, 
-                    resultado["siguiente_pregunta"],
-                    resultado.get("opciones")
+                await enviar_mensaje_whatsapp(chat_id, resultado["siguiente_pregunta"])
+            
+            return {"success": True, "message": "Next question sent"}
+        
+        # Si no hay estado o el mensaje es INICIAR, buscar entrega pendiente
+        elif texto.upper() == "INICIAR":
+            print("Usuario quiere iniciar una encuesta")
+            
+            # Buscar si hay una entrega pendiente para este número
+            entrega = (
+                db.query(EntregaEncuesta)
+                .join(Destinatario)
+                .filter(
+                    or_(
+                        Destinatario.telefono == chat_id,
+                        Destinatario.telefono == f"{chat_id}@c.us"
+                    ),
+                    EntregaEncuesta.canal_id == 2,  # Canal WhatsApp
+                    EntregaEncuesta.estado_id.notin_([ESTADO_RESPONDIDO])  # No respondida
                 )
-                return {"success": True, "message": "Next question sent"}
-    
-    # Estado desconocido, reiniciar
-    else:
-        print(f"Estado desconocido: {estado_actual}, reiniciando")
-        await enviar_mensaje_whatsapp(
-            chat_id,
-            "Hola de nuevo. Para iniciar o continuar con la encuesta, por favor escribe 'INICIAR'."
-        )
-        conversaciones_estado[chat_id] = 'esperando_confirmacion'
-        return {"success": True, "message": "State reset"}
+                .order_by(EntregaEncuesta.enviado_en.desc())
+                .first()
+            )
+            
+            if entrega:
+                # Enviar mensaje de confirmación
+                nombre = entrega.destinatario.nombre or "Hola"
+                mensaje = f"{nombre}, estamos a punto de iniciar la encuesta '{entrega.campana.nombre}'. ¿Deseas comenzar ahora? Responde SÍ para iniciar."
+                await enviar_mensaje_whatsapp(chat_id, mensaje)
+                
+                # Actualizar estado
+                conversaciones_estado[chat_id] = 'esperando_confirmacion'
+                return {"success": True, "message": "Confirmation requested"}
+            else:
+                # No hay entregas pendientes
+                mensaje = "No encontramos encuestas pendientes para tu número. Si crees que es un error, por favor contacta con el administrador."
+                await enviar_mensaje_whatsapp(chat_id, mensaje)
+                return {"success": True, "message": "No pending surveys"}
+        
+        # Estado desconocido, reiniciar
+        else:
+            print(f"Estado desconocido: {estado_actual}, reiniciando")
+            await enviar_mensaje_whatsapp(
+                chat_id,
+                "Hola. Para iniciar o continuar con la encuesta, por favor escribe 'INICIAR'."
+            )
+            conversaciones_estado[chat_id] = 'sin_estado'
+            return {"success": True, "message": "Reset state"}
+            
+    except Exception as e:
+        print(f"Error en webhook: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 @router.get("/webhook")
 async def verify_webhook(request: Request):
