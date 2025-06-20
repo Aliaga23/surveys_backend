@@ -112,33 +112,122 @@ async def crear_respuesta_encuesta(
     historial: List[Dict]
 ) -> RespuestaEncuesta:
     """
-    Crea una respuesta de encuesta a partir de las respuestas individuales guardadas
+    Crea una respuesta de encuesta a partir del historial de conversación
     """
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega:
         raise ValueError("Entrega no encontrada")
     
-    # Obtenemos todas las respuestas individuales guardadas para esta entrega
-    respuestas_temp = (
-        db.query(RespuestaTemp)
-        .filter(RespuestaTemp.entrega_id == entrega_id)
+    # Obtener todas las preguntas de la plantilla ordenadas
+    preguntas = (
+        db.query(PreguntaEncuesta)
+        .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
+        .order_by(PreguntaEncuesta.orden)
+        .options(joinedload(PreguntaEncuesta.opciones))
         .all()
     )
     
-    if not respuestas_temp:
-        raise ValueError("No se encontraron respuestas para esta entrega")
+    if not preguntas:
+        raise ValueError("No hay preguntas en la plantilla")
     
-    # Preparar las respuestas para el esquema
+    # Mapear preguntas por ID para acceso fácil
+    preguntas_map = {str(p.id): p for p in preguntas}
+    
+    # Identificar el inicio de cada pregunta en el historial
+    preguntas_indices = []
+    
+    for i, msg in enumerate(historial):
+        if msg["role"] == "assistant":
+            # Buscar qué pregunta podría estar en este mensaje
+            mensaje_texto = msg["content"].lower()
+            for p in preguntas:
+                # Si el texto de la pregunta está en el mensaje del asistente
+                if p.texto.lower() in mensaje_texto:
+                    preguntas_indices.append((i, str(p.id)))
+                    break
+    
+    # Preparar la estructura para las respuestas
     respuestas_preguntas = []
     
-    for resp in respuestas_temp:
-        respuesta_pregunta = RespuestaPreguntaCreate(
-            pregunta_id=resp.pregunta_id,
-            texto=resp.texto,
-            numero=resp.numero,
-            opcion_id=resp.opcion_id
-        )
-        respuestas_preguntas.append(respuesta_pregunta)
+    # Procesar cada pregunta identificada y su respuesta
+    for i, (msg_idx, pregunta_id) in enumerate(preguntas_indices):
+        # Obtener la pregunta correspondiente
+        pregunta = preguntas_map.get(pregunta_id)
+        if not pregunta:
+            continue
+        
+        # Buscar la respuesta del usuario (primer mensaje "user" después del mensaje del asistente)
+        respuesta_texto = None
+        for j in range(msg_idx + 1, len(historial)):
+            if historial[j]["role"] == "user":
+                respuesta_texto = historial[j]["content"]
+                break
+        
+        if not respuesta_texto:
+            continue  # No hay respuesta para esta pregunta
+        
+        # Procesar según tipo de pregunta
+        if pregunta.tipo_pregunta_id == 1:  # Texto
+            respuesta_pregunta = RespuestaPreguntaCreate(
+                pregunta_id=pregunta.id,
+                texto=respuesta_texto,
+                numero=None,
+                opcion_id=None
+            )
+            respuestas_preguntas.append(respuesta_pregunta)
+        
+        elif pregunta.tipo_pregunta_id == 2:  # Número
+            try:
+                numero = float(respuesta_texto.strip())
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=None,
+                    numero=numero,
+                    opcion_id=None
+                )
+                respuestas_preguntas.append(respuesta_pregunta)
+            except ValueError:
+                # Si no es número válido, guardar como texto
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=respuesta_texto,
+                    numero=None,
+                    opcion_id=None
+                )
+                respuestas_preguntas.append(respuesta_pregunta)
+        
+        elif pregunta.tipo_pregunta_id == 3:  # Select (opción única)
+            # Buscar la opción seleccionada exactamente
+            opcion_id = None
+            for opcion in pregunta.opciones:
+                if respuesta_texto.strip() == opcion.texto:
+                    opcion_id = opcion.id
+                    break
+                    
+            if opcion_id:
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=None,
+                    numero=None,
+                    opcion_id=opcion_id
+                )
+                respuestas_preguntas.append(respuesta_pregunta)
+        
+        elif pregunta.tipo_pregunta_id == 4:  # Multiselect
+            # Para multiselect, crear una respuesta para cada opción seleccionada
+            respuestas = [r.strip() for r in respuesta_texto.split(',')]
+            
+            for respuesta in respuestas:
+                for opcion in pregunta.opciones:
+                    if respuesta == opcion.texto:
+                        respuesta_pregunta = RespuestaPreguntaCreate(
+                            pregunta_id=pregunta.id,
+                            texto=None,
+                            numero=None,
+                            opcion_id=opcion.id
+                        )
+                        respuestas_preguntas.append(respuesta_pregunta)
+                        break
     
     # Crear el esquema de respuesta encuesta con raw_payload
     respuesta_schema = RespuestaEncuestaCreate(
@@ -151,9 +240,5 @@ async def crear_respuesta_encuesta(
     
     # Marcar la entrega como respondida
     mark_as_responded(db, entrega_id)
-    
-    # Limpiar respuestas temporales después de crear la respuesta final
-    db.query(RespuestaTemp).filter(RespuestaTemp.entrega_id == entrega_id).delete()
-    db.commit()
     
     return respuesta

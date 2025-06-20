@@ -12,9 +12,8 @@ from app.models.survey import ConversacionEncuesta
 from app.services.conversacion_service import procesar_respuesta
 from app.services.entregas_service import get_entrega_by_destinatario, iniciar_conversacion_whatsapp
 from app.services.whatsapp_service import enviar_mensaje_whatsapp
-from app.models.survey import EntregaEncuesta, ConversacionEncuesta
+from app.models.survey import EntregaEncuesta, ConversacionEncuesta, Destinatario
 from app.models.survey import RespuestaTemp
-from app.models.survey import Destinatario
 from app.core.constants import ESTADO_RESPONDIDO
 
 logger = logging.getLogger(__name__)
@@ -37,6 +36,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         chat_id = body.get("waId")
         texto = body.get("text", "").strip()
         
+        print(f"Mensaje recibido de {chat_id}: {texto}")
+        
         # Verificar datos básicos
         if not chat_id or not texto:
             return {"success": False, "message": "Datos incompletos"}
@@ -47,12 +48,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         
         # Obtener el estado actual de la conversación
         estado_actual = conversaciones_estado.get(chat_id, 'sin_estado')
+        print(f"Estado actual para {chat_id}: {estado_actual}")
         
         # Buscar si hay una entrega pendiente para este número
         entrega = None
         conversacion = None
         
-        if estado_actual != 'sin_estado':
+        if estado_actual == 'esperando_confirmacion':
             # Buscar la entrega asociada al número
             entrega = (
                 db.query(EntregaEncuesta)
@@ -67,16 +69,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 .first()
             )
             
-            if entrega and estado_actual == 'encuesta_en_progreso':
-                # Buscar la conversación activa
-                conversacion = (
-                    db.query(ConversacionEncuesta)
-                    .filter(ConversacionEncuesta.entrega_id == entrega.id)
-                    .first()
-                )
-        
-        # Manejar el flujo según el estado de la conversación
-        if estado_actual == 'esperando_confirmacion':
             respuesta_normalizada = texto.strip().lower()
             
             # Si confirma iniciar la encuesta
@@ -103,9 +95,42 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 await enviar_mensaje_whatsapp(chat_id, mensaje_aclaracion)
                 return {"success": True, "message": "Clarification requested"}
             
-        elif estado_actual == 'encuesta_en_progreso' and conversacion:
-            print(f"Procesando respuesta para encuesta en progreso: {texto}")
+        elif estado_actual == 'encuesta_en_progreso':
+            print("Procesando respuesta para encuesta en progreso")
             
+            # Buscar la entrega asociada al número
+            entrega = (
+                db.query(EntregaEncuesta)
+                .join(Destinatario)
+                .filter(
+                    or_(
+                        Destinatario.telefono == chat_id,
+                        Destinatario.telefono == f"{chat_id}@c.us"
+                    )
+                )
+                .order_by(EntregaEncuesta.enviado_en.desc())
+                .first()
+            )
+            
+            if not entrega:
+                print("Entrega no encontrada")
+                await enviar_mensaje_whatsapp(chat_id, "Lo sentimos, no encontramos tu encuesta activa. Por favor, escribe 'INICIAR' para comenzar.")
+                conversaciones_estado[chat_id] = 'sin_estado'
+                return {"success": False, "message": "Entrega no encontrada"}
+            
+            # Buscar la conversación activa
+            conversacion = (
+                db.query(ConversacionEncuesta)
+                .filter(ConversacionEncuesta.entrega_id == entrega.id)
+                .first()
+            )
+            
+            if not conversacion:
+                print("Conversación no encontrada")
+                await enviar_mensaje_whatsapp(chat_id, "Lo sentimos, no encontramos tu conversación activa. Por favor, escribe 'INICIAR' para comenzar.")
+                conversaciones_estado[chat_id] = 'sin_estado'
+                return {"success": False, "message": "Conversación no encontrada"}
+                
             # Verificar si la conversación ya está completada
             if conversacion.completada:
                 mensaje = "Esta encuesta ya ha sido completada. Gracias por tu participación."
@@ -162,7 +187,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         Destinatario.telefono == f"{chat_id}@c.us"
                     ),
                     EntregaEncuesta.canal_id == 2,  # Canal WhatsApp
-                    EntregaEncuesta.estado_id.notin_([ESTADO_RESPONDIDO])  # No respondida
+                    EntregaEncuesta.estado_id != ESTADO_RESPONDIDO  # No respondida
                 )
                 .order_by(EntregaEncuesta.enviado_en.desc())
                 .first()
@@ -195,6 +220,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             
     except Exception as e:
         print(f"Error en webhook: {str(e)}")
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 @router.get("/webhook")

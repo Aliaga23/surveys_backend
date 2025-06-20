@@ -74,7 +74,7 @@ async def procesar_respuesta(
     if not conversacion:
         raise ValueError("Conversación no encontrada")
     
-    # Si la conversación ya está marcada como completada, no procesar más respuestas
+    # Si la conversación ya está completada, no procesar más respuestas
     if conversacion.completada:
         return {
             "completada": True,
@@ -157,15 +157,7 @@ async def procesar_respuesta(
             siguiente_pregunta = preguntas_plantilla[i + 1]
             break
 
-    # Guardar respuesta individual inmediatamente después de validar
-    # Esto permite guardar cada respuesta aunque la encuesta no se complete totalmente
-    await guardar_respuesta_individual(
-        db, 
-        conversacion.entrega_id, 
-        pregunta_actual.id, 
-        pregunta_actual.tipo_pregunta_id,
-        valor_procesado
-    )
+    # No guardamos las respuestas individuales aquí, lo haremos al final
 
     if siguiente_pregunta:
         # Generar texto de la siguiente pregunta
