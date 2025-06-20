@@ -240,6 +240,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             if suscripcion and stripe_sub_id:
                 suscripcion.stripe_subscription_id = stripe_sub_id
                 suscripcion.estado = "activo"
+                suscripcion.suscriptor.estado = "activo"  # <-- ACTIVAMOS EL SUSCRIPTOR
                 db.commit()
                 print(f"Suscripción activada en checkout.session.completed: {stripe_sub_id}")
             else:
@@ -247,7 +248,6 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
 
         elif event_type == "invoice.paid":
             print(f"Payload completo de invoice.paid: {obj}")
-            # Intentamos obtener el subscription ID de dos posibles lugares
             stripe_sub_id = (
                 obj.get("subscription") or
                 (obj.get("parent", {}).get("subscription_details", {}).get("subscription"))
@@ -260,6 +260,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "activo"
+                suscripcion.suscriptor.estado = "activo"  # <-- ACTIVAMOS EL SUSCRIPTOR
                 db.commit()
                 print(f"Suscripción activada en invoice.paid: {stripe_sub_id}")
             else:
@@ -275,6 +276,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "inactivo"
+                suscripcion.suscriptor.estado = "inactivo"  # <-- DESACTIVAMOS EL SUSCRIPTOR
                 db.commit()
                 print(f"Suscripción inactivada: {stripe_sub_id}")
             else:
