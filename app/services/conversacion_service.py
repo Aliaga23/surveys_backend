@@ -1,5 +1,5 @@
 from typing import List, Optional, Dict
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 from datetime import datetime
 from openai import AsyncOpenAI
@@ -81,44 +81,67 @@ async def procesar_respuesta(
     conversacion.historial.append(nuevo_mensaje)
 
     # Obtener la pregunta actual y todas las preguntas de la plantilla
-    pregunta_actual = conversacion.pregunta_actual
-    preguntas_plantilla = (
+    pregunta_actual = (
         db.query(PreguntaEncuesta)
-        .filter(
-            PreguntaEncuesta.plantilla_id == conversacion.entrega.campana.plantilla_id
-        )
-        .order_by(PreguntaEncuesta.orden)
-        .all()
+        .filter(PreguntaEncuesta.id == conversacion.pregunta_actual_id)
+        .options(joinedload(PreguntaEncuesta.opciones))
+        .first()
     )
     
-    # Procesar la respuesta según el tipo de pregunta
+    if not pregunta_actual:
+        raise ValueError("Pregunta actual no encontrada")
+
+    preguntas_plantilla = (
+        db.query(PreguntaEncuesta)
+        .filter(PreguntaEncuesta.plantilla_id == pregunta_actual.plantilla_id)
+        .order_by(PreguntaEncuesta.orden)
+        .options(joinedload(PreguntaEncuesta.opciones))
+        .all()
+    )
+
+    # Procesamiento de la respuesta según el tipo de pregunta
     valor_procesado = None
     if pregunta_actual.tipo_pregunta_id == 1:  # Texto
         valor_procesado = respuesta_usuario
     elif pregunta_actual.tipo_pregunta_id == 2:  # Número
         try:
-            valor_procesado = float(respuesta_usuario)
-            if not (1 <= valor_procesado <= 10):
-                return {"error": "Por favor, ingresa un número entre 1 y 10"}
+            valor_procesado = float(respuesta_usuario.strip())
         except ValueError:
             return {"error": "Por favor, ingresa un número válido"}
-    elif pregunta_actual.tipo_pregunta_id == 3:  # Select
-        # Validar que la respuesta coincida con alguna opción
-        mejor_coincidencia = None
-        mejor_score = 0
+    elif pregunta_actual.tipo_pregunta_id == 3:  # Select (opción única)
+        # Verificar si la respuesta es una opción válida
+        opcion_seleccionada = None
         for opcion in pregunta_actual.opciones:
-            score = fuzz.ratio(respuesta_usuario.lower(), opcion.texto.lower())
-            if score > mejor_score:
-                mejor_score = score
-                mejor_coincidencia = opcion
+            if respuesta_usuario.strip() == opcion.texto:
+                opcion_seleccionada = opcion
+                break
         
-        if mejor_score < 70:
+        if not opcion_seleccionada:
             opciones_texto = "\n".join([f"- {op.texto}" for op in pregunta_actual.opciones])
-            return {"error": f"Por favor, elige una de las siguientes opciones:\n{opciones_texto}"}
-        valor_procesado = mejor_coincidencia.id
+            return {"error": f"Por favor, elige exactamente una de estas opciones:\n{opciones_texto}"}
+        
+        valor_procesado = opcion_seleccionada.id
     elif pregunta_actual.tipo_pregunta_id == 4:  # Multiselect
-        # Implementar lógica para multiselect
-        pass
+        # Para multiselect, el usuario puede seleccionar varias opciones
+        opciones_seleccionadas = []
+        respuestas = [r.strip() for r in respuesta_usuario.split(',')]
+        
+        for respuesta in respuestas:
+            opcion_valida = False
+            for opcion in pregunta_actual.opciones:
+                if respuesta == opcion.texto:
+                    opciones_seleccionadas.append(opcion.id)
+                    opcion_valida = True
+                    break
+                    
+            if not opcion_valida:
+                return {"error": f"'{respuesta}' no es una opción válida para esta pregunta"}
+        
+        if not opciones_seleccionadas:
+            opciones_texto = "\n".join([f"- {op.texto}" for op in pregunta_actual.opciones])
+            return {"error": f"Por favor, elige una o más opciones separadas por comas:\n{opciones_texto}"}
+        
+        valor_procesado = opciones_seleccionadas
 
     # Encontrar la siguiente pregunta en orden
     siguiente_pregunta = None
@@ -159,11 +182,12 @@ async def procesar_respuesta(
         conversacion.completada = True
         db.commit()
         
-        # Crear la respuesta final
-        await crear_respuesta_encuesta(db, conversacion.entrega_id, conversacion.historial)
+        # Crear la respuesta final con todas las respuestas acumuladas
+        respuesta = await crear_respuesta_encuesta(db, conversacion.entrega_id, conversacion.historial)
         
         return {
             "valor_procesado": valor_procesado,
             "siguiente_pregunta": "¡Gracias por completar la encuesta!",
-            "completada": True
+            "completada": True,
+            "respuesta_id": str(respuesta.id)
         }

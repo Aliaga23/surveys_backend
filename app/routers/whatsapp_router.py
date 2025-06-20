@@ -145,30 +145,36 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         resultado = await procesar_respuesta(db, conversacion.id, texto)
         
         if "error" in resultado:
-            print(f"Error en respuesta: {resultado['error']}")
             await enviar_mensaje_whatsapp(chat_id, resultado["error"])
             return {"success": True, "message": "Error handled"}
         else:
-            # Enviar siguiente pregunta con opciones si existen
-            print(f"Enviando siguiente pregunta: {resultado['siguiente_pregunta'][:30]}...")
-            await enviar_mensaje_whatsapp(
-                chat_id, 
-                resultado["siguiente_pregunta"],
-                resultado.get("opciones")
-            )
-            
             # Si se completó la encuesta
             if resultado.get("completada", False):
-                print("Encuesta completada")
-                await enviar_mensaje_whatsapp(
-                    chat_id,
-                    "¡Muchas gracias por completar la encuesta! Tus respuestas son muy valiosas para nosotros. 😊"
-                )
-                # Restablecer estado
+                # Enviar mensaje de agradecimiento
+                mensaje_final = "¡Muchas gracias por completar la encuesta! Tus respuestas han sido registradas correctamente."
+                
+                # Adicionalmente enviar la ID de la respuesta
+                if resultado.get("respuesta_id"):
+                    mensaje_final += f"\n\nCódigo de referencia: {resultado['respuesta_id'][:8]}"
+                    
+                await enviar_mensaje_whatsapp(chat_id, mensaje_final)
+                
+                # Eliminar el estado de la conversación
                 conversaciones_estado.pop(chat_id, None)
-                print(f"Estado de conversación reiniciado para {chat_id}")
-                return {"success": True, "message": "Survey completed"}
-            return {"success": True, "message": "Next question sent"}
+                
+                return {
+                    "success": True, 
+                    "message": "Survey completed", 
+                    "respuesta_id": resultado.get("respuesta_id")
+                }
+            else:
+                # Enviar siguiente pregunta con opciones si existen
+                await enviar_mensaje_whatsapp(
+                    chat_id, 
+                    resultado["siguiente_pregunta"],
+                    resultado.get("opciones")
+                )
+                return {"success": True, "message": "Next question sent"}
     
     # Estado desconocido, reiniciar
     else:
