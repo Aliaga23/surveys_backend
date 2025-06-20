@@ -224,12 +224,13 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     print(f"Evento recibido: {event['type']}")
 
     try:
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
-            stripe_sub_id = session.get("subscription")
-            customer_id = session.get("customer")
+        obj = event["data"]["object"]
+        event_type = event["type"]
 
-            # Buscar la suscripción pendiente
+        if event_type == "checkout.session.completed":
+            stripe_sub_id = obj.get("subscription")
+            customer_id = obj.get("customer")
+
             suscripcion = db.query(SuscripcionSuscriptor).join(Suscriptor).filter(
                 SuscripcionSuscriptor.stripe_subscription_id == None,
                 Suscriptor.stripe_customer_id == customer_id
@@ -239,20 +240,34 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 suscripcion.stripe_subscription_id = stripe_sub_id
                 suscripcion.estado = "activo"
                 db.commit()
+            else:
+                print(f"No se encontró suscripción pendiente o falta subscription_id en checkout.session.completed")
 
-        elif event["type"] == "invoice.paid":
-            stripe_sub_id = event["data"]["object"]["subscription"]
+        elif event_type == "invoice.paid":
+            stripe_sub_id = obj.get("subscription")
+            if not stripe_sub_id:
+                print("invoice.paid recibido pero sin subscription ID")
+                return {"status": "ignored"}
+
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "activo"
                 db.commit()
+            else:
+                print(f"No se encontró suscripción con stripe_subscription_id={stripe_sub_id}")
 
-        elif event["type"] == "customer.subscription.deleted":
-            stripe_sub_id = event["data"]["object"]["id"]
+        elif event_type == "customer.subscription.deleted":
+            stripe_sub_id = obj.get("id")
+            if not stripe_sub_id:
+                print("customer.subscription.deleted recibido pero sin ID")
+                return {"status": "ignored"}
+
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
             if suscripcion:
                 suscripcion.estado = "inactivo"
                 db.commit()
+            else:
+                print(f"No se encontró suscripción con stripe_subscription_id={stripe_sub_id}")
 
     except Exception as e:
         print(f"Error procesando evento: {e}")
