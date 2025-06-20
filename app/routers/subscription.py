@@ -228,7 +228,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         event_type = event["type"]
 
         if event_type == "checkout.session.completed":
-            print(f"Payload completo de checkout.session.completed: {obj}")  # <-- Para inspección
+            print(f"Payload completo de checkout.session.completed: {obj}")
             stripe_sub_id = obj.get("subscription")
             customer_id = obj.get("customer")
 
@@ -241,12 +241,18 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 suscripcion.stripe_subscription_id = stripe_sub_id
                 suscripcion.estado = "activo"
                 db.commit()
+                print(f"Suscripción activada en checkout.session.completed: {stripe_sub_id}")
             else:
                 print(f"No se encontró suscripción pendiente o falta subscription_id en checkout.session.completed")
 
         elif event_type == "invoice.paid":
-            print(f"Payload completo de invoice.paid: {obj}")  # <-- Para inspección
-            stripe_sub_id = obj.get("subscription")
+            print(f"Payload completo de invoice.paid: {obj}")
+            # Intentamos obtener el subscription ID de dos posibles lugares
+            stripe_sub_id = (
+                obj.get("subscription") or
+                (obj.get("parent", {}).get("subscription_details", {}).get("subscription"))
+            )
+
             if not stripe_sub_id:
                 print("invoice.paid recibido pero sin subscription ID. Revisa el payload arriba.")
                 return {"status": "ignored"}
@@ -255,11 +261,12 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             if suscripcion:
                 suscripcion.estado = "activo"
                 db.commit()
+                print(f"Suscripción activada en invoice.paid: {stripe_sub_id}")
             else:
                 print(f"No se encontró suscripción con stripe_subscription_id={stripe_sub_id}")
 
         elif event_type == "customer.subscription.deleted":
-            print(f"Payload completo de customer.subscription.deleted: {obj}")  # <-- Para inspección
+            print(f"Payload completo de customer.subscription.deleted: {obj}")
             stripe_sub_id = obj.get("id")
             if not stripe_sub_id:
                 print("customer.subscription.deleted recibido pero sin ID")
@@ -269,6 +276,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             if suscripcion:
                 suscripcion.estado = "inactivo"
                 db.commit()
+                print(f"Suscripción inactivada: {stripe_sub_id}")
             else:
                 print(f"No se encontró suscripción con stripe_subscription_id={stripe_sub_id}")
 
