@@ -228,6 +228,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         event_type = event["type"]
 
         if event_type == "checkout.session.completed":
+            print(f"Payload completo de checkout.session.completed: {obj}")  # <-- Para inspección
             stripe_sub_id = obj.get("subscription")
             customer_id = obj.get("customer")
 
@@ -244,9 +245,10 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"No se encontró suscripción pendiente o falta subscription_id en checkout.session.completed")
 
         elif event_type == "invoice.paid":
+            print(f"Payload completo de invoice.paid: {obj}")  # <-- Para inspección
             stripe_sub_id = obj.get("subscription")
             if not stripe_sub_id:
-                print("invoice.paid recibido pero sin subscription ID")
+                print("invoice.paid recibido pero sin subscription ID. Revisa el payload arriba.")
                 return {"status": "ignored"}
 
             suscripcion = db.query(SuscripcionSuscriptor).filter_by(stripe_subscription_id=stripe_sub_id).first()
@@ -257,6 +259,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
                 print(f"No se encontró suscripción con stripe_subscription_id={stripe_sub_id}")
 
         elif event_type == "customer.subscription.deleted":
+            print(f"Payload completo de customer.subscription.deleted: {obj}")  # <-- Para inspección
             stripe_sub_id = obj.get("id")
             if not stripe_sub_id:
                 print("customer.subscription.deleted recibido pero sin ID")
