@@ -9,7 +9,7 @@ from app.routers.entregas_router import public_router as entregas_public_router
 from app.routers import whatsapp_router
 from app.routers import vapi_router
 from app.routers import analytics_router
-from app.routers import nlp_router
+#from app.routers import nlp_router
 from app.routers import encuestas_router
 
 app = FastAPI(title="Mi API SaaS", version="0.1.0")
@@ -41,7 +41,7 @@ app.include_router(entregas_public_router)
 app.include_router(whatsapp_router.router)
 app.include_router(vapi_router.router)
 app.include_router(analytics_router.router)
-app.include_router(nlp_router.router)
+#app.include_router(nlp_router.router)
 app.include_router(encuestas_router.router)
 
 @app.get("/", summary="Health check")
