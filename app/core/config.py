@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     STRIPE_SECRET_KEY: str
     STRIPE_PUBLIC_KEY: str
     STRIPE_WEBHOOK_SECRET: str
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    SURVEY_LINK_EXPIRY_DAYS: int 
+    SMTP_SERVER: str 
+    SMTP_PORT: int 
+    SMTP_USERNAME: str 
+    SMTP_PASSWORD: str 
+    
     class Config:
         env_file = ".env"
 

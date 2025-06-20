@@ -36,3 +36,12 @@ class RespuestaEncuestaOut(RespuestaEncuestaBase):
     respuestas_preguntas: List[RespuestaPreguntaOut] = []
 
     model_config = {"from_attributes": True}
+
+class RespuestaCreateEmail(BaseModel):
+    """Esquema para crear respuestas desde el enlace de email"""
+    pregunta_id: str
+    tipo_respuesta: str  # "texto", "numero", "opcion", "opciones"
+    texto: Optional[str] = None
+    numero: Optional[float] = None
+    opcion_id: Optional[str] = None
+    opciones_ids: Optional[List[str]] = None

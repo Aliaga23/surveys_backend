@@ -2,24 +2,51 @@ from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 from uuid import UUID
-from datetime import datetime
-from fastapi import HTTPException, logger, status
+from datetime import datetime, timedelta
+import jwt  # Añadir esta importación
+import logging
+from fastapi import HTTPException, status
 
 from app.core.constants import (
     ESTADO_PENDIENTE, ESTADO_ENVIADO, 
     ESTADO_RESPONDIDO, ESTADO_FALLIDO
 )
+from app.core.config import settings
 from app.models.survey import (
     CampanaEncuesta, ConversacionEncuesta, 
     Destinatario, EntregaEncuesta, 
     PlantillaEncuesta, PreguntaEncuesta
 )
+from app.models.suscriptor import Suscriptor  # Añadir esta importación
 from app.services.whatsapp_service import enviar_mensaje_whatsapp
+from app.services.email_service import enviar_email  # Añadir esta importación
 from app.schemas.conversacion_schema import Mensaje
 from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
 from app.services.conversacion_service import generar_siguiente_pregunta
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.vapi_service import crear_llamada_encuesta
+
+logger = logging.getLogger(__name__)
+
+# Nuevas funciones para manejar tokens y URLs de encuestas
+def generar_token_encuesta(entrega_id: UUID) -> str:
+    """
+    Genera un token JWT para la encuesta que incluye el ID de entrega
+    y tiene una expiración configurable
+    """
+    expiration = datetime.utcnow() + timedelta(days=settings.SURVEY_LINK_EXPIRY_DAYS)
+    payload = {
+        "sub": str(entrega_id),
+        "exp": expiration
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+def generar_url_encuesta(entrega_id: UUID) -> str:
+    """
+    Genera la URL completa para responder la encuesta, incluyendo el token
+    """
+    token = generar_token_encuesta(entrega_id)
+    return f"{settings.FRONTEND_URL}/encuestas/{token}"
 
 def create_entrega(
     db: Session, 
@@ -261,8 +288,59 @@ async def create_entrega(
     db.commit()
     db.refresh(entrega)
 
+    # Si es canal Email (1), generar link y enviar email
+    if payload.canal_id == 1:  # Email
+        try:
+            # Obtener información completa de la entrega con plantilla y preguntas
+            entrega = get_entrega_con_plantilla(db, entrega.id)
+            if not entrega.destinatario.email:
+                entrega.estado_id = ESTADO_FALLIDO
+                db.commit()
+                raise ValueError("El destinatario no tiene email")
+            
+            # Obtener suscriptor para usar como remitente
+            suscriptor = db.query(Suscriptor).filter_by(
+                id=entrega.campana.suscriptor_id
+            ).first()
+            
+            if not suscriptor:
+                raise ValueError("No se pudo obtener información del suscriptor")
+            
+            # Generar URL para la encuesta
+            url_encuesta = generar_url_encuesta(entrega.id)
+            
+            # Obtener datos para el email
+            nombre = entrega.destinatario.nombre or "Estimado/a"
+            campana_nombre = entrega.campana.nombre
+            suscriptor_nombre = suscriptor.nombre  # Usar el nombre del suscriptor
+            
+            # Enviar email con el link
+            await enviar_email(
+                destinatario_email=entrega.destinatario.email,
+                destinatario_nombre=nombre,
+                asunto=f"Te invitamos a responder una encuesta: {campana_nombre}",
+                nombre_campana=campana_nombre,
+                nombre_empresa=suscriptor_nombre,  # Nombre del suscriptor como remitente
+                url_encuesta=url_encuesta
+            )
+            
+            # Marcar como enviada
+            entrega.estado_id = ESTADO_ENVIADO
+            entrega.enviado_en = datetime.now()
+            db.commit()
+            db.refresh(entrega)
+            
+        except Exception as e:
+            entrega.estado_id = ESTADO_FALLIDO
+            db.commit()
+            logger.error(f"Error enviando email: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error enviando email: {str(e)}"
+            )
+    
     # Si es canal WhatsApp, enviar saludo de bienvenida inmediatamente
-    if payload.canal_id == 2:  # WhatsApp
+    elif payload.canal_id == 2:  # WhatsApp
         try:
             # Obtener información necesaria
             entrega = get_entrega_con_plantilla(db, entrega.id)
