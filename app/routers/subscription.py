@@ -19,6 +19,7 @@ from app.schemas.subscription import (
 )
 from app.models.subscription import SuscripcionSuscriptor
 from app.models.suscriptor import Suscriptor
+from app.models.subscription import PlanSuscripcion
 
 
 # Configuración del router
