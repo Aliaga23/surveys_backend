@@ -9,7 +9,7 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.config import settings
-from app.models.survey import ConversacionEncuesta
+from app.models.survey import CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta, PlantillaEncuesta, PreguntaEncuesta
 from app.services.conversacion_service import procesar_respuesta
 from app.services.entregas_service import get_entrega_by_destinatario, iniciar_conversacion_whatsapp
 from app.services.whatsapp_service import enviar_mensaje_whatsapp, procesar_webhook_whatsapp
@@ -110,13 +110,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             if es_confirmacion:
                 logger.info(f"Usuario {numero} confirmó iniciar la encuesta")
                 try:
-                    await iniciar_conversacion_whatsapp(db, entrega.id)
+                    # Enviar primera pregunta
+                    await enviar_primera_pregunta(db, entrega.id, chat_id)
                     conversaciones_estado[chat_id] = 'encuesta_en_progreso'
-                    return {"success": True, "message": "Survey started"}
+                    return {"success": True, "message": "First question sent"}
+                    
                 except Exception as e:
                     logger.error(f"Error iniciando encuesta: {str(e)}")
                     await enviar_mensaje_whatsapp(
-                        chat_id, 
+                        chat_id,
                         "Lo siento, ocurrió un error. Escribe 'INICIAR' para intentar nuevamente."
                     )
                     return {"success": False, "error": str(e)}
@@ -400,3 +402,40 @@ async def enviar_siguiente_pregunta(chat_id: str, pregunta_info: Dict):
         await enviar_mensaje_whatsapp(chat_id, mensaje)
     else:  # Texto libre
         await enviar_mensaje_whatsapp(chat_id, pregunta_info["siguiente_pregunta"])
+
+async def enviar_primera_pregunta(db: Session, entrega_id: UUID, chat_id: str):
+    """Envía la primera pregunta de la encuesta"""
+    # Obtener la primera pregunta de la plantilla
+    pregunta = (
+        db.query(PreguntaEncuesta)
+        .join(PlantillaEncuesta)
+        .join(CampanaEncuesta)
+        .join(EntregaEncuesta)
+        .filter(EntregaEncuesta.id == entrega_id)
+        .order_by(PreguntaEncuesta.orden)
+        .first()
+    )
+    
+    if not pregunta:
+        raise ValueError("No se encontraron preguntas en la plantilla")
+        
+    # Actualizar la conversación con la pregunta actual
+    conversacion = (
+        db.query(ConversacionEncuesta)
+        .filter(ConversacionEncuesta.entrega_id == entrega_id)
+        .first()
+    )
+    conversacion.pregunta_actual_id = pregunta.id
+    db.commit()
+    
+    # Enviar la primera pregunta según su tipo
+    if pregunta.tipo_pregunta_id in [3, 4]:
+        opciones = [op.texto for op in pregunta.opciones]
+        await enviar_mensaje_whatsapp(
+            chat_id,
+            pregunta.texto,
+            opciones=opciones,
+            tipo_mensaje="opciones"
+        )
+    else:
+        await enviar_mensaje_whatsapp(chat_id, pregunta.texto)

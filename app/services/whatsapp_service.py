@@ -11,37 +11,33 @@ async def enviar_mensaje_whatsapp(
     numero_destino: str, 
     mensaje: str, 
     opciones: Optional[List[str]] = None,
-    tipo_mensaje: str = "normal"  # "normal", "confirmacion", "opciones", "lista"
+    tipo_mensaje: str = "normal"
 ) -> Dict:
-    """Envía un mensaje por WhatsApp usando la API de Whapi."""
+    """Envía un mensaje por WhatsApp usando la API de Whapi"""
     try:
         # Normalizar número
         if '@' in numero_destino:
             numero_destino = numero_destino.split('@')[0]
         numero_destino = re.sub(r'[^0-9]', '', numero_destino)
         
-        logger.info(f"Enviando mensaje a {numero_destino}")
-        
         headers = {
             "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
             "Content-Type": "application/json"
         }
-        
-        url = f"{settings.WHAPI_API_URL}/messages/interactive"
-        
+
+        # Solo para el mensaje inicial de confirmación
         if tipo_mensaje == "confirmacion":
-            # Mensaje con botones Sí/No
             payload = {
                 "to": numero_destino,
                 "type": "button",
                 "header": {
-                    "text": "Encuesta"
+                    "text": "Nueva Encuesta"
                 },
                 "body": {
                     "text": mensaje
                 },
                 "footer": {
-                    "text": "Por favor confirma para continuar"
+                    "text": "Toca un botón para continuar"
                 },
                 "action": {
                     "buttons": [
@@ -51,36 +47,35 @@ async def enviar_mensaje_whatsapp(
                             "id": "btn_si"
                         },
                         {
-                            "type": "quick_reply", 
+                            "type": "quick_reply",
                             "title": "No",
                             "id": "btn_no"
                         }
                     ]
                 }
             }
-        elif tipo_mensaje == "lista" and opciones:
-            # Mensaje con lista de opciones
+            url = f"{settings.WHAPI_API_URL}/messages/interactive"
+            
+        # Para preguntas con opciones (tipo 3 o 4)
+        elif tipo_mensaje == "opciones" and opciones:
             payload = {
                 "to": numero_destino,
                 "type": "list",
                 "header": {
-                    "text": "Opciones"
+                    "text": "Pregunta"
                 },
                 "body": {
                     "text": mensaje
-                },
-                "footer": {
-                    "text": "Selecciona una opción"
                 },
                 "action": {
                     "list": {
                         "sections": [
                             {
-                                "title": "Opciones disponibles",
+                                "title": "Selecciona una opción",
                                 "rows": [
                                     {
                                         "id": f"opt_{i}",
-                                        "title": opcion[:24]  # Límite de WhatsApp
+                                        "title": opcion[:24]
                                     } for i, opcion in enumerate(opciones)
                                 ]
                             }
@@ -89,16 +84,16 @@ async def enviar_mensaje_whatsapp(
                     }
                 }
             }
+            url = f"{settings.WHAPI_API_URL}/messages/interactive"
+            
+        # Para preguntas normales (tipo 1 o 2)
         else:
-            # Mensaje de texto normal
-            url = f"{settings.WHAPI_API_URL}/messages/text"
             payload = {
                 "to": numero_destino,
                 "body": mensaje
             }
+            url = f"{settings.WHAPI_API_URL}/messages/text"
 
-        logger.debug(f"Enviando payload: {json.dumps(payload, indent=2)}")
-        
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers)
             

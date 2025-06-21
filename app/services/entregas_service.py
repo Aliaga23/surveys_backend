@@ -184,45 +184,41 @@ def get_entrega_by_destinatario(
     return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
-    """Inicia el flujo de la encuesta mostrando resumen y solicitando confirmación"""
+    """Inicia el flujo de la encuesta con saludo y botones de confirmación"""
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
 
-    # Generar resumen de la encuesta
-    preguntas = (
-        db.query(PreguntaEncuesta)
-        .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
-        .order_by(PreguntaEncuesta.orden)
-        .options(joinedload(PreguntaEncuesta.opciones))
-        .all()
+    # Crear mensaje de bienvenida personalizado
+    nombre = entrega.destinatario.nombre or "Hola"
+    mensaje = (
+        f"¡Hola {nombre}! 👋\n\n"
+        f"Te invitamos a participar en la encuesta: *{entrega.campana.nombre}*\n\n"
+        "¿Deseas comenzar ahora?"
     )
-    
-    # Crear mensaje de resumen
-    resumen = f"*{entrega.campana.nombre}*\n\n"
-    resumen += "La encuesta contiene las siguientes preguntas:\n\n"
-    
-    for i, pregunta in enumerate(preguntas, 1):
-        resumen += f"{i}. {pregunta.texto}\n"
-        if pregunta.opciones:
-            for j, opcion in enumerate(pregunta.opciones, 1):
-                resumen += f"   {j}) {opcion.texto}\n"
-        resumen += "\n"
-    
-    resumen += "\n¿Deseas comenzar la encuesta ahora?"
 
-    # Enviar mensaje con botones de confirmación
+    # Enviar mensaje con botones de confirmación Sí/No
     resultado = await enviar_mensaje_whatsapp(
         entrega.destinatario.telefono,
-        resumen,
+        mensaje,
         tipo_mensaje="confirmacion"
     )
 
     if not resultado["success"]:
         raise ValueError(f"Error enviando mensaje: {resultado.get('error')}")
 
-    logger.info(f"Mensaje de inicio enviado a {entrega.destinatario.telefono}")
-    return True
+    # Crear nueva conversación si no existe
+    conversacion = ConversacionEncuesta(
+        entrega_id=entrega_id,
+        completada=False,
+        historial=[],
+        pregunta_actual_id=None  # Se establecerá la primera pregunta cuando confirme
+    )
+    db.add(conversacion)
+    db.commit()
+
+    logger.info(f"Mensaje de bienvenida enviado a {entrega.destinatario.telefono}")
+    return conversacion
 
 async def create_entrega(
     db: Session, 
