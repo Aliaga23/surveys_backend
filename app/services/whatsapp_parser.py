@@ -7,14 +7,18 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
-    """
-    Devuelve (texto_visible, id_payload) para cualquier tipo de mensaje.
-    """
     mtype = msg.get("type")
-    if mtype == "button":  # quick-reply (botones “Sí/No”)
+
+    if mtype == "button":
         btn = msg.get("button", {})
         return btn.get("text", ""), btn.get("payload", "")
-    if mtype == "interactive":  # reply-button o lista
+
+   
+    if mtype == "text" and msg.get("context", {}).get("id"):
+        return msg.get("text", {}).get("body", ""), ""
+
+    # Listas y reply-buttons empaquetados en "interactive"
+    if mtype == "interactive":
         data = msg.get("interactive", {})
         if data.get("type") == "button_reply":
             br = data.get("button_reply", {})
@@ -22,10 +26,13 @@ def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
         if data.get("type") == "list_reply":
             lr = data.get("list_reply", {})
             return lr.get("title", ""), lr.get("id", "")
+
+    # Texto normal
     if mtype == "text":
         return msg.get("text", {}).get("body", ""), ""
-    # Cualquier otro tipo (audio, imagen, documento…)
+
     return "", ""
+
 
 
 def parse_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
