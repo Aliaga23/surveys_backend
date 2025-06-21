@@ -6,6 +6,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_access_token, get_current_user
+from app.core.config import settings
 
 from app.models.catalogos import Rol
 from app.models.administrador import Administrador
@@ -190,3 +191,123 @@ def get_current_user_profile(
         )
     
     raise HTTPException(status_code=400, detail="Tipo de usuario no reconocido")
+
+
+@router.post(
+    "/request-registration",
+    status_code=status.HTTP_200_OK
+)
+async def request_registration(
+    payload: SuscriptorCreate,
+    db: Session = Depends(get_db)
+):
+    # 1. Verifica que el email no esté registrado
+    if db.query(Suscriptor).filter_by(email=payload.email).first():
+        raise HTTPException(status_code=400, detail="El email ya está registrado")
+
+    # 2. Verifica que no haya un admin o cuenta_usuario con ese email (por seguridad)
+    if db.query(Administrador).filter_by(email=payload.email).first():
+        raise HTTPException(status_code=400, detail="El email ya está registrado")
+    if db.query(CuentaUsuario).filter_by(email=payload.email).first():
+        raise HTTPException(status_code=400, detail="El email ya está registrado")
+
+    # 3. Generar el token (JWT) con datos del registro
+    from app.core.security import hash_password
+    from app.core.security import create_access_token
+    from datetime import timedelta
+
+    password_hash = hash_password(payload.password)
+
+    # Creamos un payload simple
+    from datetime import datetime, timezone
+    import jwt
+
+    token_data = {
+        "sub": payload.email,
+        "nombre": payload.nombre,
+        "telefono": payload.telefono,
+        "password_hash": password_hash,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=24)
+    }
+
+    token = jwt.encode(
+        token_data,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM
+    )
+
+    # 4. Armar el link
+    url_verificacion = f"{settings.FRONTEND_URL}/auth/verify-registration?token={token}"
+
+    # 5. Enviar el email
+    from app.services.email_service import enviar_email_verificacion
+    enviado = await enviar_email_verificacion(
+        destinatario_email=payload.email,
+        destinatario_nombre=payload.nombre,
+        url_verificacion=url_verificacion
+    )
+
+    if not enviado:
+        raise HTTPException(status_code=500, detail="No se pudo enviar el correo de verificación")
+
+    return {"message": "Correo de verificación enviado. Revisa tu bandeja de entrada."}
+
+
+
+@router.get("/verify-registration")
+def verify_registration(
+    token: str,
+    db: Session = Depends(get_db)
+):
+    import jwt
+    from jwt import ExpiredSignatureError, InvalidTokenError
+    from uuid import uuid4
+
+    try:
+        # Decodificar el token
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM]
+        )
+
+        email = payload["sub"]
+        nombre = payload["nombre"]
+        telefono = payload["telefono"]
+        password_hash = payload["password_hash"]
+
+        # Verificar que el email no esté registrado
+        if db.query(Suscriptor).filter_by(email=email).first():
+            raise HTTPException(status_code=400, detail="El email ya está registrado")
+        if db.query(Administrador).filter_by(email=email).first():
+            raise HTTPException(status_code=400, detail="El email ya está registrado")
+        if db.query(CuentaUsuario).filter_by(email=email).first():
+            raise HTTPException(status_code=400, detail="El email ya está registrado")
+
+        # Buscar el rol de empresa
+        rol_empresa = db.query(Rol).filter_by(nombre="empresa").first()
+        if not rol_empresa:
+            raise HTTPException(status_code=500, detail="Rol 'empresa' no configurado")
+
+        # Crear el suscriptor
+        sus = Suscriptor(
+            id=uuid4(),
+            nombre=nombre,
+            email=email,
+            telefono=telefono,
+            password_hash=password_hash,
+            rol_id=rol_empresa.id,
+            estado="inactivo"
+        )
+        db.add(sus)
+        db.commit()
+        db.refresh(sus)
+
+        return {"message": "Cuenta activada correctamente"}
+
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="El enlace ha expirado")
+    except InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al activar la cuenta: {str(e)}")
