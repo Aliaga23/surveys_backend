@@ -42,6 +42,8 @@ def _norm(txt: str) -> str:
 # DESAMBIGUAR OPCIONES
 # --------------------------------------------------------------------------- #
 # ---------- helper _match_opcion_ai (usa GPT SOLO en múltiple) ----------- #
+# --------------------------- GPT helper ---------------------------------- #
+# (solo toca ESTA función)
 
 async def _match_opcion_ai(
     respuesta: str,
@@ -49,81 +51,59 @@ async def _match_opcion_ai(
     multiple: bool,
 ) -> Tuple[Any, str]:
     """
-    • Pregunta de opción única (tipo 3)  →
-        1) Intenta coincidencia exacta o número “1-based”.
-        2) Si no encuentra nada, pregunta a GPT (fallback).
-    • Pregunta multiselección (tipo 4)  →
-        Siempre delega a GPT; no hace ningún match local.
-    Devuelve:
-        – int          (para tipo 3)
-        – List[int]    (para tipo 4)
-        – (None, msg)  si no reconoce la respuesta.
+    • tipo 3  → primero intento rápido (texto ► índice / número “1-based”),
+                si falla le pregunto a GPT.
+    • tipo 4  → SIEMPRE le pregunto a GPT.
+    Devuelve int (tipo 3) o List[int] (tipo 4).  Si no reconoce ⇒ (None, error)
     """
 
-    # ---------- opción ÚNICA : intentamos match directo ------------------ #
+    # ---------- INTENTO RÁPIDO PARA TIPO-3 ------------------------------- #
     if not multiple:
         n_resp = _norm(respuesta)
-
-        # 1) texto exacto
         for i, op in enumerate(opciones):
             if n_resp == _norm(op):
                 return i, ""
-
-        # 2) algún número “1-based” dentro del mensaje
         for n in [int(x) - 1 for x in re.findall(r"\b\d+\b", respuesta)]:
             if 0 <= n < len(opciones):
                 return n, ""
-        # …si falló, se cae a GPT como fallback
+        # → si nada, continúa a GPT
 
-    # -------------------- GPT (multiselección o fallback) ---------------- #
+    # ---------------------- GPT (multiselección o fallback) --------------- #
     prompt = (
-        "Lista de opciones con su índice (0-based):\n"
-        + "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones))
-        + "\n\nRespuesta del usuario:\n"
-        + respuesta
-        + "\n\nDevuelve *solo* los índices "
-        + ("separados por coma" if multiple else "")
-        + ". Si no reconoces nada responde exactamente 'ERROR'."
+        "Te doy la lista de opciones con su índice (empieza en 0):\n" +
+        "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones)) +
+        "\n\nRespuesta del usuario:\n" + respuesta +
+        "\n\nDevuélveme **SOLO** los índices (0-based) " +
+        ("separados por coma" if multiple else "") +
+        ".  Si no reconoces nada responde EXACTAMENTE 'ERROR'."
     )
 
     try:
-        rsp = await client.chat.completions.create(
-            model="gpt-4o",
+        gpt = await client.chat.completions.create(
+            # usa 3.5 para evitar límites de cuenta; cámbialo si tienes acceso
+            model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
+            max_tokens=20,
         )
-        txt = rsp.choices[0].message.content.strip()
+        txt = gpt.choices[0].message.content.strip()
 
         if txt.upper().startswith("ERROR"):
-            return None, (
-                "No pude identificar tu selección. "
-                "Por favor elige una opción válida de la lista."
-            )
+            return None, "No pude identificar tu selección. Intenta nuevamente."
 
         idxs = [int(n) for n in re.findall(r"\d+", txt)]
 
         if multiple:
             buenos = [i for i in idxs if 0 <= i < len(opciones)]
-            if buenos:
-                return buenos, ""
-            return None, (
-                "No reconozco ninguna de las opciones que escribiste. "
-                "Intenta nuevamente."
-            )
-        else:  # único, llegó aquí solo como fallback
-            if idxs and 0 <= idxs[0] < len(opciones):
-                return idxs[0], ""
-            return None, (
-                "No reconozco la opción que escribiste. "
-                "Intenta nuevamente."
+            return buenos if buenos else (None, "No reconocí las opciones escritas."), ""
+        else:
+            return idxs[0], "" if idxs and 0 <= idxs[0] < len(opciones) else (
+                None, "No reconocí la opción escrita."
             )
 
-    except Exception as exc:  # pragma: no cover
-        logger.debug("GPT error: %s", exc)
-        return None, (
-            "Ocurrió un problema interpretando tu respuesta. "
-            "Intenta nuevamente."
-        )
+    except Exception as exc:
+        logger.warning("GPT falló: %s", exc)
+        return None, "Hubo un problema al interpretar la respuesta. Intenta otra vez."
 
 
 
