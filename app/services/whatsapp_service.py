@@ -15,14 +15,6 @@ async def enviar_mensaje_whatsapp(
 ) -> Dict:
     """
     Envía un mensaje por WhatsApp usando la API de Whapi.
-    
-    Args:
-        numero_destino: Número de teléfono del destinatario
-        mensaje: Texto del mensaje
-        opciones: Lista de opciones para mostrar (opcional)
-    
-    Returns:
-        Dict con información sobre el resultado del envío
     """
     try:
         # Normalizar número de teléfono (eliminar @c.us si existe)
@@ -32,43 +24,44 @@ async def enviar_mensaje_whatsapp(
         # Eliminar espacios y caracteres especiales
         numero_destino = re.sub(r'[^0-9]', '', numero_destino)
         
-        # Formatear el mensaje con las opciones si existen
-        mensaje_completo = mensaje
-        if opciones and len(opciones) > 0:
-            mensaje_completo += "\n\nOpciones disponibles:"
-            for i, opcion in enumerate(opciones, 1):
-                mensaje_completo += f"\n{i}. {opcion}"
+        logger.info(f"Enviando mensaje a {numero_destino}: {mensaje[:50]}...")
         
-        logger.info(f"Enviando mensaje a {numero_destino}: {mensaje_completo[:50]}...")
-        
-        # Preparar la petición según la documentación de Whapi
+        # Preparar headers comunes
         headers = {
             "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
             "Content-Type": "application/json"
         }
         
-        # Usar siempre 'to' en lugar de 'phone' para consistencia con la API
+        # Construir el payload según si hay opciones o no
         if opciones and len(opciones) > 0:
-            # Mensaje con botones interactivos
+            # Mensaje con botones
             url = f"{settings.WHAPI_API_URL}/messages/interactive/buttons"
             payload = {
                 "to": numero_destino,
-                "body": mensaje,
+                "body": mensaje,  # Aquí está el parámetro 'body' para botones
                 "buttons": [{"id": f"btn_{i}", "text": opcion} for i, opcion in enumerate(opciones)]
             }
         else:
             # Mensaje de texto simple
             url = f"{settings.WHAPI_API_URL}/messages/text"
+            # Para mensajes de texto simples, también usar 'body' en lugar de 'message'
             payload = {
-                "to": numero_destino,  # Usar 'to' en lugar de 'phone'
-                "message": mensaje_completo
+                "to": numero_destino,
+                "body": mensaje  # Cambiado de 'message' a 'body' para consistencia
             }
+        
+        # Debug: mostrar URL y payload
+        logger.debug(f"URL: {url}")
+        logger.debug(f"Payload: {json.dumps(payload)}")
         
         # Enviar el mensaje
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers, timeout=15.0)
             
-            # Log de la respuesta
+            # Log detallado de la respuesta
+            logger.debug(f"Status: {response.status_code}")
+            logger.debug(f"Response: {response.text}")
+            
             if response.status_code != 200:
                 logger.error(f"Error enviando mensaje: {response.status_code} - {response.text}")
                 return {"success": False, "error": response.text}
