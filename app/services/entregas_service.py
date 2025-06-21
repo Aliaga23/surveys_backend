@@ -18,7 +18,7 @@ from app.models.survey import (
     PlantillaEncuesta, PreguntaEncuesta
 )
 from app.models.suscriptor import Suscriptor  # Añadir esta importación
-from app.services.whatsapp_service import enviar_mensaje_whatsapp
+from app.services import whatsapp_service as ws
 from app.services.email_service import enviar_email  # Añadir esta importación
 from app.schemas.conversacion_schema import Mensaje
 from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
@@ -300,12 +300,10 @@ async def create_entrega(
             )
             
             # Usar el tipo de mensaje "confirmacion" para mostrar botones Sí/No
-            await enviar_mensaje_whatsapp(
-                numero_destino=entrega.destinatario.telefono,
-                mensaje=mensaje_saludo,
-                tipo_mensaje="confirmacion"
+            await ws.send_confirm(
+                entrega.destinatario.telefono,
+                mensaje_saludo
             )
-            
             # Marcar como enviada y agregar a estado de conversaciones
             entrega.estado_id = ESTADO_ENVIADO
             entrega.enviado_en = datetime.now()
