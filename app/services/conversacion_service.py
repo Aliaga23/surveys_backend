@@ -1,21 +1,27 @@
 # app/services/conversacion_service.py
 from __future__ import annotations
-from typing import List, Dict, Any, Tuple
-from uuid import UUID
-from datetime import datetime
-import re, json, logging, unicodedata
 
-from sqlalchemy.orm import Session, joinedload
+import json, logging, re, unicodedata
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
+from uuid import UUID
+
 from openai import AsyncOpenAI
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.models.survey import (
-    CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta,
-    PlantillaEncuesta, PreguntaEncuesta,
-    RespuestaEncuesta, RespuestaPregunta,
+    CampanaEncuesta,
+    ConversacionEncuesta,
+    EntregaEncuesta,
+    PlantillaEncuesta,
+    PreguntaEncuesta,
+    RespuestaEncuesta,
+    RespuestaPregunta,
 )
-from app.services.shared_service import get_entrega_con_plantilla
+from app.services.entregas_service import mark_as_responded  # ⬅️ NUEVO
 from app.services.respuestas_service import crear_respuesta_encuesta
+from app.services.shared_service import get_entrega_con_plantilla
 
 logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
@@ -24,15 +30,18 @@ client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 # UTILIDADES
 # --------------------------------------------------------------------------- #
 
+
 def _norm(txt: str) -> str:
-    """Minúsculas, sin acentos, espacios colapsados → para comparación."""
+    """minúsculas, sin acentos, espacios colapsados → para comparación rápida"""
     txt = unicodedata.normalize("NFKD", txt)
     txt = "".join(c for c in txt if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", txt.lower().strip())
 
+
 # --------------------------------------------------------------------------- #
 # DESAMBIGUAR OPCIONES
 # --------------------------------------------------------------------------- #
+
 
 async def _match_opcion_ai(
     respuesta: str,
@@ -41,33 +50,38 @@ async def _match_opcion_ai(
 ) -> Tuple[Any, str]:
     """
     Devuelve:
-      • índice int        (tipo 3)
-      • lista[int]        (tipo 4)
-      • (None, error_msg) si no se identifica
-    Siempre usa GPT para tipo 4 (multiselección), como pidió el usuario.
+      · índice int         (tipo 3)
+      · lista[int]         (tipo 4)
+      · (None, error_msg)  si no se identifica
+
+    – Para tipo 4 se delega SIEMPRE a GPT.  
+    – Para tipo 3 se prueba primero coincidencia exacta / numérica,
+      y se usa GPT solo si no hubo match.
     """
 
-    # ------------------------------- tipo 3 -------------------------------- #
+    # ---------- casos rápidos para selección ÚNICA ------------------------ #
     if not multiple:
-        # coincidencia exacta rápida
-        norm_resp = _norm(respuesta)
+        n_resp = _norm(respuesta)
+
+        # coincidencia exacta de texto
         for i, op in enumerate(opciones):
-            if norm_resp == _norm(op):
+            if n_resp == _norm(op):
                 return i, ""
 
-        # número «1»-basado dentro del mensaje
-        numeros = [int(n) - 1 for n in re.findall(r"\b\d+\b", respuesta)]
-        for n in numeros:
+        # algún número “1-based” en el mensaje
+        for n in [int(x) - 1 for x in re.findall(r"\b\d+\b", respuesta)]:
             if 0 <= n < len(opciones):
                 return n, ""
 
-    # ----------------- GPT (siempre para multiple, fallback en 3) ----------- #
+    # --------------------------- GPT -------------------------------------- #
     prompt = (
-        f"Opciones disponibles (en orden):\n{', '.join(opciones)}\n\n"
-        f"Respuesta del usuario:\n{respuesta}\n\n"
-        "Devuelve SOLO los índices (basado en 0) de las opciones que eligió el "
-        f"usuario{' separados por coma' if multiple else ''}. "
-        "Si la respuesta no coincide con ninguna opción, responde EXACTAMENTE 'ERROR'."
+        "Lista de opciones con su índice (0-based):\n"
+        + "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones))
+        + "\n\nRespuesta del usuario:\n"
+        + respuesta
+        + "\n\nDevuelve **solo** los índices "
+        + ("separados por coma" if multiple else "")
+        + ". Si no reconoces nada escribe exactamente 'ERROR'."
     )
 
     try:
@@ -79,57 +93,71 @@ async def _match_opcion_ai(
         txt = rsp.choices[0].message.content.strip()
 
         if txt.upper().startswith("ERROR"):
-            return None, "No pude identificar tu selección. Por favor elige una opción válida de la lista."
+            return None, (
+                "No pude identificar tu selección. "
+                "Por favor elige una opción válida de la lista."
+            )
 
-        indices = [int(n) for n in re.findall(r"\d+", txt)]
+        idxs = [int(n) for n in re.findall(r"\d+", txt)]
 
         if multiple:
-            buenos = [i for i in indices if 0 <= i < len(opciones)]
+            buenos = [i for i in idxs if 0 <= i < len(opciones)]
             if buenos:
                 return buenos, ""
-            return None, "No reconozco ninguna de las opciones que escribiste."
+            return None, (
+                "No reconozco ninguna de las opciones que escribiste. "
+                "Intenta nuevamente."
+            )
         else:
-            if indices and 0 <= indices[0] < len(opciones):
-                return indices[0], ""
-            return None, "No reconozco la opción que escribiste."
+            if idxs and 0 <= idxs[0] < len(opciones):
+                return idxs[0], ""
+            return None, "No reconozco la opción que escribiste. Intenta nuevamente."
 
     except Exception as exc:  # pragma: no cover
         logger.debug("GPT error: %s", exc)
-        return None, "Ocurrió un problema interpretando tu respuesta. Intenta nuevamente."
+        return None, (
+            "Ocurrió un problema interpretando tu respuesta. "
+            "Intenta nuevamente."
+        )
+
 
 # --------------------------------------------------------------------------- #
 # FUNCIÓN PRINCIPAL
 # --------------------------------------------------------------------------- #
+
 
 async def procesar_respuesta(
     db: Session,
     conversacion_id: UUID,
     respuesta: str,
 ) -> Dict[str, Any]:
-    # ---------- contexto de la conversación ----------
+    # -------- contexto ---------------------------------------------------- #
     conv = (
         db.query(ConversacionEncuesta)
-        .options(joinedload(ConversacionEncuesta.entrega)
-                 .joinedload(EntregaEncuesta.campana)
-                 .joinedload(CampanaEncuesta.plantilla))
+        .options(
+            joinedload(ConversacionEncuesta.entrega)
+            .joinedload(EntregaEncuesta.campana)
+            .joinedload(CampanaEncuesta.plantilla)
+        )
         .filter(ConversacionEncuesta.id == conversacion_id)
         .first()
     )
     if not conv:
         raise ValueError("Conversación no encontrada")
-
     if conv.completada:
         return {"completada": True}
 
-    # ---------- guardar en historial ----------
+    # -------- historial --------------------------------------------------- #
     conv.historial = conv.historial or []
-    conv.historial.append({
-        "role": "user",
-        "content": respuesta,
-        "timestamp": datetime.now().isoformat(),
-    })
+    conv.historial.append(
+        {
+            "role": "user",
+            "content": respuesta,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
-    # ---------- pregunta actual ----------
+    # -------- pregunta actual -------------------------------------------- #
     pregunta = (
         db.query(PreguntaEncuesta)
         .options(joinedload(PreguntaEncuesta.opciones))
@@ -139,29 +167,28 @@ async def procesar_respuesta(
     if not pregunta:
         raise ValueError("Pregunta actual no encontrada")
 
-    # ---------- validar ----------
-    if pregunta.tipo_pregunta_id == 1:        # texto libre
+    # -------- validar ----------------------------------------------------- #
+    if pregunta.tipo_pregunta_id == 1:  # texto libre
         valor = respuesta
 
-    elif pregunta.tipo_pregunta_id == 2:      # numérico
+    elif pregunta.tipo_pregunta_id == 2:  # numérico
         try:
             valor = float(respuesta.strip())
         except ValueError:
             return {"error": "Por favor ingresa un número válido."}
 
-    else:                                     # opciones
-        indices, err = await _match_opcion_ai(
+    else:  # opciones
+        valor, err = await _match_opcion_ai(
             respuesta,
             [o.texto for o in pregunta.opciones],
             multiple=(pregunta.tipo_pregunta_id == 4),
         )
         if err:
             return {"error": err}
-        valor = indices
 
-    # ---------------------------------------------------------------------- #
+    # --------------------------------------------------------------------- #
     #  GUARDAR RESPUESTA EN BD
-    # ---------------------------------------------------------------------- #
+    # --------------------------------------------------------------------- #
     r_enc = (
         db.query(RespuestaEncuesta)
         .filter(RespuestaEncuesta.entrega_id == conv.entrega_id)
@@ -189,10 +216,10 @@ async def procesar_respuesta(
         det = RespuestaPregunta(
             respuesta_id=r_enc.id,
             pregunta_id=pregunta.id,
-            opcion_id=pregunta.opciones[valor].id,
+            opcion_id=pregunta.opciones[valor].id,  # type: ignore[arg-type]
         )
     else:  # multiselección
-        uuids = [str(pregunta.opciones[i].id) for i in valor]
+        uuids = [str(pregunta.opciones[i].id) for i in valor]  # type: ignore[arg-type]
         det = RespuestaPregunta(
             respuesta_id=r_enc.id,
             pregunta_id=pregunta.id,
@@ -202,9 +229,9 @@ async def procesar_respuesta(
     db.add(det)
     db.commit()
 
-    # ---------------------------------------------------------------------- #
+    # --------------------------------------------------------------------- #
     #  SIGUIENTE PREGUNTA
-    # ---------------------------------------------------------------------- #
+    # --------------------------------------------------------------------- #
     todas = (
         db.query(PreguntaEncuesta)
         .join(PlantillaEncuesta)
@@ -217,16 +244,24 @@ async def procesar_respuesta(
     pos = {p.id: i for i, p in enumerate(todas)}[pregunta.id]
     siguiente = todas[pos + 1] if pos + 1 < len(todas) else None
 
-    if not siguiente:  # encuesta terminada
+    # ---------- fin de encuesta ------------------------------------------ #
+    if not siguiente:
         conv.completada = True
         db.commit()
-        resumen = await crear_respuesta_encuesta(db, conv.entrega_id, conv.historial)
+
+        # marcar la entrega como RESPONDIDA (estado 3)
+        mark_as_responded(db, conv.entrega_id)
+
+        resumen = await crear_respuesta_encuesta(
+            db, conv.entrega_id, conv.historial
+        )
         return {"completada": True, "respuesta_id": str(resumen.id)}
 
+    # ---------- avanzar puntero ------------------------------------------ #
     conv.pregunta_actual_id = siguiente.id
     db.commit()
 
-    salida = {
+    salida: Dict[str, Any] = {
         "completada": False,
         "siguiente_pregunta": siguiente.texto,
         "tipo_pregunta": siguiente.tipo_pregunta_id,
@@ -235,9 +270,11 @@ async def procesar_respuesta(
         salida["opciones"] = [o.texto for o in siguiente.opciones]
     return salida
 
+
 # --------------------------------------------------------------------------- #
 # CREAR CONVERSACIÓN INICIAL
 # --------------------------------------------------------------------------- #
+
 
 async def iniciar_conversacion_whatsapp(
     db: Session,

@@ -1,84 +1,72 @@
-from typing import List, Optional
-from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
-from uuid import UUID
-from datetime import datetime, timedelta
-import jwt  # Añadir esta importación
-import logging
-from fastapi import HTTPException, status
+# app/services/entregas_service.py
+from __future__ import annotations
 
-from app.core.constants import (
-    ESTADO_PENDIENTE, ESTADO_ENVIADO, 
-    ESTADO_RESPONDIDO, ESTADO_FALLIDO
-)
+import logging
+from datetime import datetime, timedelta
+from typing import List, Optional
+from uuid import UUID
+
+import jwt
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session, joinedload
+
 from app.core.config import settings
-from app.models.survey import (
-    CampanaEncuesta, ConversacionEncuesta, 
-    Destinatario, EntregaEncuesta, 
-    PlantillaEncuesta, PreguntaEncuesta
+from app.core.constants import (
+    ESTADO_ENVIADO,
+    ESTADO_FALLIDO,
+    ESTADO_PENDIENTE,
+    ESTADO_RESPONDIDO,
 )
-from app.models.suscriptor import Suscriptor  # Añadir esta importación
+from app.models.survey import (
+    Destinatario,
+    EntregaEncuesta,
+    PreguntaEncuesta,
+    PlantillaEncuesta,
+)
+from app.models.suscriptor import Suscriptor
 from app.services import whatsapp_service as ws
-from app.services.email_service import enviar_email  # Añadir esta importación
-from app.schemas.conversacion_schema import Mensaje
-from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
+from app.services.email_service import enviar_email
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.vapi_service import crear_llamada_encuesta
-from app.services.conversacion_service import iniciar_conversacion_whatsapp
+from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
 
 logger = logging.getLogger(__name__)
 
-# Nuevas funciones para manejar tokens y URLs de encuestas
-def generar_token_encuesta(entrega_id: UUID) -> str:
-    """
-    Genera un token JWT para la encuesta que incluye el ID de entrega
-    y tiene una expiración configurable
-    """
+# --------------------------------------------------------------------------- #
+# HELPERS TOKEN / URL
+# --------------------------------------------------------------------------- #
+
+
+def _generar_token_encuesta(entrega_id: UUID) -> str:
     expiration = datetime.utcnow() + timedelta(days=settings.SURVEY_LINK_EXPIRY_DAYS)
-    payload = {
-        "sub": str(entrega_id),
-        "exp": expiration
-    }
+    payload = {"sub": str(entrega_id), "exp": expiration}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
-def generar_url_encuesta(entrega_id: UUID) -> str:
-    """
-    Genera la URL completa para responder la encuesta, incluyendo el token
-    """
-    token = generar_token_encuesta(entrega_id)
-    return f"{settings.FRONTEND_URL}/encuestas/{token}"
 
-def create_entrega(
-    db: Session, 
-    campana_id: UUID, 
-    payload: EntregaCreate
-) -> EntregaEncuesta:
-    entrega = EntregaEncuesta(
-        **payload.model_dump(),
-        campana_id=campana_id,
-        estado_id=ESTADO_PENDIENTE  # Estado inicial: pendiente
-    )
-    db.add(entrega)
-    db.commit()
-    db.refresh(entrega)
-    return entrega
+def _generar_url_encuesta(entrega_id: UUID) -> str:
+    return f"{settings.FRONTEND_URL}/encuestas/{_generar_token_encuesta(entrega_id)}"
+
+
+# --------------------------------------------------------------------------- #
+# CRUD BÁSICO
+# --------------------------------------------------------------------------- #
+
 
 def get_entrega(db: Session, entrega_id: UUID) -> Optional[EntregaEncuesta]:
     return (
         db.query(EntregaEncuesta)
         .options(
             joinedload(EntregaEncuesta.destinatario),
-            joinedload(EntregaEncuesta.respuestas)
+            joinedload(EntregaEncuesta.respuestas),
+            joinedload(EntregaEncuesta.conversacion),
         )
         .filter(EntregaEncuesta.id == entrega_id)
         .first()
     )
 
+
 def list_entregas(
-    db: Session, 
-    campana_id: UUID,
-    skip: int = 0,
-    limit: int = 100
+    db: Session, campana_id: UUID, skip: int = 0, limit: int = 100
 ) -> List[EntregaEncuesta]:
     return (
         db.query(EntregaEncuesta)
@@ -88,261 +76,252 @@ def list_entregas(
         .all()
     )
 
+
 def update_entrega(
-    db: Session, 
-    entrega_id: UUID, 
-    payload: EntregaUpdate
+    db: Session, entrega_id: UUID, payload: EntregaUpdate
 ) -> Optional[EntregaEncuesta]:
     entrega = get_entrega(db, entrega_id)
     if not entrega:
         return None
-
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(entrega, field, value)
-    
     db.commit()
     db.refresh(entrega)
     return entrega
 
+
 def delete_entrega(db: Session, entrega_id: UUID) -> bool:
-    entrega = get_entrega(db, entrega_id)
+    entrega =get_entrega(db, entrega_id)
     if not entrega:
         return False
     db.delete(entrega)
     db.commit()
     return True
 
+
+# --------------------------------------------------------------------------- #
+# CAMBIOS DE ESTADO
+# --------------------------------------------------------------------------- #
+
+
 def mark_as_sent(db: Session, entrega_id: UUID) -> Optional[EntregaEncuesta]:
-    """Marca una entrega como enviada"""
-    entrega = get_entrega(db, entrega_id)
-    if not entrega:
+    ent = get_entrega(db, entrega_id)
+    if not ent:
         return None
-    
-    if entrega.estado_id != ESTADO_PENDIENTE:
+    if ent.estado_id != ESTADO_PENDIENTE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No se puede marcar como enviada. Estado actual: {entrega.estado_id}"
+            detail=f"No se puede marcar como enviada. Estado actual: {ent.estado_id}",
         )
-    
-    entrega.estado_id = ESTADO_ENVIADO
-    entrega.enviado_en = datetime.now()
+    ent.estado_id = ESTADO_ENVIADO
+    ent.enviado_en = datetime.now()
     db.commit()
-    db.refresh(entrega)
-    return entrega
+    db.refresh(ent)
+    return ent
+
 
 def mark_as_responded(db: Session, entrega_id: UUID) -> Optional[EntregaEncuesta]:
-    """Marca una entrega como respondida"""
-    entrega = get_entrega(db, entrega_id)
-    if not entrega:
+    ent = get_entrega(db, entrega_id)
+    if not ent:
         return None
-    
-    if entrega.estado_id not in [ESTADO_ENVIADO, ESTADO_PENDIENTE]:
+    if ent.estado_id not in (ESTADO_PENDIENTE, ESTADO_ENVIADO):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"No se puede marcar como respondida. Estado actual: {entrega.estado_id}"
+            detail=f"No se puede marcar como respondida. Estado actual: {ent.estado_id}",
         )
-    
-    entrega.estado_id = ESTADO_RESPONDIDO
-    entrega.respondido_en = datetime.now()
+    ent.estado_id = ESTADO_RESPONDIDO
+    ent.respondido_en = datetime.now()
     db.commit()
-    db.refresh(entrega)
-    return entrega
+    db.refresh(ent)
+    return ent
 
-def mark_as_failed(db: Session, entrega_id: UUID, reason: str = None) -> Optional[EntregaEncuesta]:
-    """Marca una entrega como fallida"""
-    entrega = get_entrega(db, entrega_id)
-    if not entrega:
+
+def mark_as_failed(
+    db: Session, entrega_id: UUID, reason: str | None = None
+) -> Optional[EntregaEncuesta]:
+    ent = get_entrega(db, entrega_id)
+    if not ent:
         return None
-    
-    entrega.estado_id = ESTADO_FALLIDO
+    ent.estado_id = ESTADO_FALLIDO
     db.commit()
-    db.refresh(entrega)
-    return entrega
+    db.refresh(ent)
+    if reason:
+        logger.error("Entrega %s marcada como fallida: %s", entrega_id, reason)
+    return ent
+
+
+# --------------------------------------------------------------------------- #
+# BUSCAR ENTREGA POR DESTINATARIO
+# --------------------------------------------------------------------------- #
+
 
 def get_entrega_by_destinatario(
-    db: Session, 
-    email: Optional[str] = None, 
-    telefono: Optional[str] = None
+    db: Session, *, email: str | None = None, telefono: str | None = None
 ) -> Optional[EntregaEncuesta]:
-    """Busca una entrega por el email o teléfono del destinatario con la relación conversación cargada"""
     if not email and not telefono:
         return None
 
-    query = (db.query(EntregaEncuesta)
-             .join(EntregaEncuesta.destinatario)
-             .options(joinedload(EntregaEncuesta.conversacion))  # Cargar la relación
-             )
-    
+    q = (
+        db.query(EntregaEncuesta)
+        .join(EntregaEncuesta.destinatario)
+        .options(joinedload(EntregaEncuesta.conversacion))
+    )
+
     if email:
-        query = query.filter(Destinatario.email == email)
+        q = q.filter(Destinatario.email == email)
     if telefono:
-        # Normalizar teléfono para búsqueda
-        telefono_limpio = telefono.split('@')[0] if '@' in telefono else telefono
-        query = query.filter(Destinatario.telefono.contains(telefono_limpio))
-        
-    # Ordenar por enviado_en en lugar de created_at
-    return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
+        t_clean = telefono.split("@")[0] if "@" in telefono else telefono
+        q = q.filter(Destinatario.telefono.contains(t_clean))
+
+    return q.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
+
+
+# --------------------------------------------------------------------------- #
+# CREACIÓN Y ENVÍO DE ENTREGAS (async)
+# --------------------------------------------------------------------------- #
+
 
 async def create_entrega(
-    db: Session, 
-    campana_id: UUID, 
-    payload: EntregaCreate
+    db: Session,
+    campana_id: UUID,
+    payload: EntregaCreate,
 ) -> EntregaEncuesta:
-    # Create base entrega
+    """
+    Crea la entrega y dispara el canal correspondiente.
+
+    Canal 1 → Email  
+    Canal 2 → WhatsApp  
+    Canal 3 → Vapi (llamada)
+    """
     entrega = EntregaEncuesta(
         **payload.model_dump(),
         campana_id=campana_id,
-        estado_id=ESTADO_PENDIENTE
+        estado_id=ESTADO_PENDIENTE,
     )
     db.add(entrega)
     db.commit()
     db.refresh(entrega)
 
-    # Si es canal Email (1), generar link y enviar email
-    if payload.canal_id == 1:  # Email
+    # ------------------------------------------------------------------ #
+    # CANAL EMAIL
+    # ------------------------------------------------------------------ #
+    if payload.canal_id == 1:
         try:
-            # Obtener información completa de la entrega con plantilla y preguntas
             entrega = get_entrega_con_plantilla(db, entrega.id)
             if not entrega.destinatario.email:
-                entrega.estado_id = ESTADO_FALLIDO
-                db.commit()
                 raise ValueError("El destinatario no tiene email")
-            
-            # Obtener suscriptor para usar como remitente
-            suscriptor = db.query(Suscriptor).filter_by(
-                id=entrega.campana.suscriptor_id
-            ).first()
-            
+
+            suscriptor: Suscriptor | None = db.get(
+                Suscriptor, entrega.campana.suscriptor_id
+            )
             if not suscriptor:
-                raise ValueError("No se pudo obtener información del suscriptor")
-            
-            # Generar URL para la encuesta
-            url_encuesta = generar_url_encuesta(entrega.id)
-            
-            # Obtener datos para el email
-            nombre = entrega.destinatario.nombre or "Estimado/a"
-            campana_nombre = entrega.campana.nombre
-            suscriptor_nombre = suscriptor.nombre  # Usar el nombre del suscriptor
-            
-            # Enviar email con el link
+                raise ValueError("No se encontró el suscriptor")
+
             await enviar_email(
                 destinatario_email=entrega.destinatario.email,
-                destinatario_nombre=nombre,
-                asunto=f"Te invitamos a responder una encuesta: {campana_nombre}",
-                nombre_campana=campana_nombre,
-                nombre_empresa=suscriptor_nombre,  # Nombre del suscriptor como remitente
-                url_encuesta=url_encuesta
-            )
-            
-            # Marcar como enviada
-            entrega.estado_id = ESTADO_ENVIADO
-            entrega.enviado_en = datetime.now()
-            db.commit()
-            db.refresh(entrega)
-            
-        except Exception as e:
-            entrega.estado_id = ESTADO_FALLIDO
-            db.commit()
-            logger.error(f"Error enviando email: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error enviando email: {str(e)}"
-            )
-    
-    # Si es canal WhatsApp, enviar saludo de bienvenida inmediatamente
-    elif payload.canal_id == 2:  # WhatsApp
-        try:
-            # Obtener información necesaria
-            entrega = get_entrega_con_plantilla(db, entrega.id)
-            if not entrega.destinatario.telefono:
-                raise ValueError("El destinatario no tiene número de teléfono")
-            
-            # Enviar saludo inicial con botones
-            nombre = entrega.destinatario.nombre or "estimado/a"
-            mensaje_saludo = (
-                f"¡Hola {nombre}! 👋\n\n"
-                f"Soy el asistente virtual de {entrega.campana.nombre}. "
-                f"Tenemos una encuesta breve que nos gustaría que completes."
-            )
-            
-            # Usar el tipo de mensaje "confirmacion" para mostrar botones Sí/No
-            await ws.send_confirm(
-                entrega.destinatario.telefono,
-                mensaje_saludo
-            )
-            # Marcar como enviada y agregar a estado de conversaciones
-            entrega.estado_id = ESTADO_ENVIADO
-            entrega.enviado_en = datetime.now()
-            db.commit()
-            db.refresh(entrega)
-            
-            # Agregar a las conversaciones activas
-            from app.routers.whatsapp_router import conversaciones_estado
-            numero = entrega.destinatario.telefono.split('@')[0] if '@' in entrega.destinatario.telefono else entrega.destinatario.telefono
-            conversaciones_estado[numero] = 'esperando_confirmacion'
-            
-        except Exception as e:
-            entrega.estado_id = ESTADO_FALLIDO
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error iniciando conversación: {str(e)}"
+                destinatario_nombre=entrega.destinatario.nombre or "Estimado/a",
+                asunto=f"Te invitamos a responder una encuesta: {entrega.campana.nombre}",
+                nombre_campana=entrega.campana.nombre,
+                nombre_empresa=suscriptor.nombre,
+                url_encuesta=_generar_url_encuesta(entrega.id),
             )
 
-    # Si es canal Vapi (llamada telefónica)
-    elif payload.canal_id == 3:  # Vapi
+            entrega.estado_id = ESTADO_ENVIADO
+            entrega.enviado_en = datetime.now()
+            db.commit()
+            db.refresh(entrega)
+
+        except Exception as exc:
+            mark_as_failed(db, entrega.id, str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error enviando email: {exc}",
+            ) from exc
+
+    # ------------------------------------------------------------------ #
+    # CANAL WHATSAPP
+    # ------------------------------------------------------------------ #
+    elif payload.canal_id == 2:
         try:
-            # Obtener información completa de la entrega con plantilla y preguntas
             entrega = get_entrega_con_plantilla(db, entrega.id)
             if not entrega.destinatario.telefono:
-                raise ValueError("El destinatario no tiene número de teléfono")
-            
-            # Extraer las preguntas y opciones de la plantilla
-            preguntas = []
+                raise ValueError("El destinatario no tiene teléfono")
+
+            saludo = (
+                f"¡Hola {entrega.destinatario.nombre or 'estimado/a'}! 👋\n\n"
+                f"Soy el asistente virtual de {entrega.campana.nombre}. "
+                "Tenemos una encuesta breve que nos gustaría que completes."
+            )
+            await ws.send_confirm(entrega.destinatario.telefono, saludo)
+
+            entrega.estado_id = ESTADO_ENVIADO
+            entrega.enviado_en = datetime.now()
+            db.commit()
+            db.refresh(entrega)
+
+            # registrar estado inicial en el cache en memoria
+            try:
+                from app.routers.whatsapp_router import conversaciones_estado  # noqa
+                num = (
+                    entrega.destinatario.telefono.split("@")[0]
+                    if "@c.us" in entrega.destinatario.telefono
+                    else entrega.destinatario.telefono
+                )
+                conversaciones_estado[num] = "esperando_confirmacion"
+            except Exception:
+                logger.debug("No se pudo registrar conversaciones_estado", exc_info=True)
+
+        except Exception as exc:
+            mark_as_failed(db, entrega.id, str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error iniciando conversación: {exc}",
+            ) from exc
+
+    # ------------------------------------------------------------------ #
+    # CANAL VAPI (LLAMADA)
+    # ------------------------------------------------------------------ #
+    elif payload.canal_id == 3:
+        try:
+            entrega = get_entrega_con_plantilla(db, entrega.id)
+            if not entrega.destinatario.telefono:
+                raise ValueError("El destinatario no tiene teléfono")
+
+            preguntas: List[dict] = []
             if entrega.campana and entrega.campana.plantilla:
-                for pregunta in entrega.campana.plantilla.preguntas:
-                    pregunta_dict = {
-                        "id": str(pregunta.id),
-                        "texto": pregunta.texto,
-                        "tipo_pregunta_id": pregunta.tipo_pregunta_id,
-                        "obligatorio": pregunta.obligatorio,
-                        "opciones": []
-                    }
-                    
-                    # Si tiene opciones, incluirlas
-                    if hasattr(pregunta, 'opciones') and pregunta.opciones:
-                        pregunta_dict["opciones"] = [
-                            {"id": str(op.id), "texto": op.texto, "valor": op.valor} 
-                            for op in pregunta.opciones
-                        ]
-                    
-                    preguntas.append(pregunta_dict)
-            
-            # Crear la llamada con Vapi
-            nombre_destinatario = entrega.destinatario.nombre or "Estimado cliente"
-            campana_nombre = entrega.campana.nombre  # Usar el nombre de la campaña directamente
-            
+                for p in entrega.campana.plantilla.preguntas:
+                    preguntas.append(
+                        {
+                            "id": str(p.id),
+                            "texto": p.texto,
+                            "tipo_pregunta_id": p.tipo_pregunta_id,
+                            "obligatorio": p.obligatorio,
+                            "opciones": [
+                                {"id": str(o.id), "texto": o.texto, "valor": o.valor}
+                                for o in getattr(p, "opciones", [])
+                            ],
+                        }
+                    )
+
             await crear_llamada_encuesta(
                 db=db,
                 entrega_id=entrega.id,
                 telefono=entrega.destinatario.telefono,
-                nombre_destinatario=nombre_destinatario,
-                campana_nombre=campana_nombre,
-                preguntas=preguntas
+                nombre_destinatario=entrega.destinatario.nombre or "Cliente",
+                campana_nombre=entrega.campana.nombre,
+                preguntas=preguntas,
             )
-            
-            # Marcar como enviada
+
             entrega.estado_id = ESTADO_ENVIADO
             entrega.enviado_en = datetime.now()
             db.commit()
             db.refresh(entrega)
-            
-        except Exception as e:
-            entrega.estado_id = ESTADO_FALLIDO
-            db.commit()
+
+        except Exception as exc:
+            mark_as_failed(db, entrega.id, str(exc))
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Error iniciando llamada: {str(e)}"
-            )
+                detail=f"Error iniciando llamada: {exc}",
+            ) from exc
 
     return entrega
