@@ -25,7 +25,7 @@ async def enviar_mensaje_whatsapp(
             "Content-Type": "application/json"
         }
 
-        # Solo para el mensaje inicial de confirmación
+        # Mensaje inicial con botones Sí/No
         if tipo_mensaje == "confirmacion":
             payload = {
                 "to": numero_destino,
@@ -56,7 +56,7 @@ async def enviar_mensaje_whatsapp(
             }
             url = f"{settings.WHAPI_API_URL}/messages/interactive"
             
-        # Para preguntas con opciones (tipo 3 o 4)
+        # Pregunta con opciones
         elif tipo_mensaje == "opciones" and opciones:
             payload = {
                 "to": numero_destino,
@@ -71,7 +71,7 @@ async def enviar_mensaje_whatsapp(
                     "list": {
                         "sections": [
                             {
-                                "title": "Selecciona una opción",
+                                "title": "Opciones disponibles",
                                 "rows": [
                                     {
                                         "id": f"opt_{i}",
@@ -86,7 +86,7 @@ async def enviar_mensaje_whatsapp(
             }
             url = f"{settings.WHAPI_API_URL}/messages/interactive"
             
-        # Para preguntas normales (tipo 1 o 2)
+        # Mensaje de texto normal
         else:
             payload = {
                 "to": numero_destino,

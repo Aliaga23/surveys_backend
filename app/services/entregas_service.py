@@ -183,21 +183,24 @@ def get_entrega_by_destinatario(
     # Ordenar por enviado_en en lugar de created_at
     return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
 
-async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
-    """Inicia el flujo de la encuesta con saludo y botones de confirmación"""
+async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> ConversacionEncuesta:
+    """
+    Inicia una nueva conversación de encuesta enviando solo el mensaje de bienvenida
+    con botones de confirmación.
+    """
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
 
-    # Crear mensaje de bienvenida personalizado
+    # Mensaje de bienvenida personalizado y conciso
     nombre = entrega.destinatario.nombre or "Hola"
     mensaje = (
-        f"¡Hola {nombre}! 👋\n\n"
+        f"¡{nombre}! 👋\n\n"
         f"Te invitamos a participar en la encuesta: *{entrega.campana.nombre}*\n\n"
         "¿Deseas comenzar ahora?"
     )
 
-    # Enviar mensaje con botones de confirmación Sí/No
+    # Enviar mensaje inicial con botones Sí/No
     resultado = await enviar_mensaje_whatsapp(
         entrega.destinatario.telefono,
         mensaje,
@@ -207,17 +210,22 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
     if not resultado["success"]:
         raise ValueError(f"Error enviando mensaje: {resultado.get('error')}")
 
-    # Crear nueva conversación si no existe
+    # Crear nueva conversación
     conversacion = ConversacionEncuesta(
         entrega_id=entrega_id,
         completada=False,
-        historial=[],
-        pregunta_actual_id=None  # Se establecerá la primera pregunta cuando confirme
+        historial=[{
+            "role": "assistant",
+            "content": mensaje,
+            "timestamp": datetime.now().isoformat()
+        }],
+        pregunta_actual_id=None  # Se establecerá cuando confirme
     )
+    
     db.add(conversacion)
     db.commit()
+    db.refresh(conversacion)
 
-    logger.info(f"Mensaje de bienvenida enviado a {entrega.destinatario.telefono}")
     return conversacion
 
 async def create_entrega(
@@ -294,16 +302,20 @@ async def create_entrega(
             if not entrega.destinatario.telefono:
                 raise ValueError("El destinatario no tiene número de teléfono")
             
-            # Enviar saludo inicial
+            # Enviar saludo inicial con botones
             nombre = entrega.destinatario.nombre or "estimado/a"
             mensaje_saludo = (
                 f"¡Hola {nombre}! 👋\n\n"
                 f"Soy el asistente virtual de {entrega.campana.nombre}. "
-                f"Tenemos una encuesta breve que nos gustaría que completes.\n\n"
-                f"¿Te gustaría empezar ahora? Responde 'SI' para comenzar o 'NO' para hacerlo más tarde."
+                f"Tenemos una encuesta breve que nos gustaría que completes."
             )
             
-            await enviar_mensaje_whatsapp(entrega.destinatario.telefono, mensaje_saludo)
+            # Usar el tipo de mensaje "confirmacion" para mostrar botones Sí/No
+            await enviar_mensaje_whatsapp(
+                numero_destino=entrega.destinatario.telefono,
+                mensaje=mensaje_saludo,
+                tipo_mensaje="confirmacion"
+            )
             
             # Marcar como enviada y agregar a estado de conversaciones
             entrega.estado_id = ESTADO_ENVIADO
