@@ -2,14 +2,14 @@ from typing import List, Optional, Dict
 from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 from datetime import datetime
-from fastapi import HTTPException, logger, status
+from fastapi import HTTPException, status
 from thefuzz import fuzz
-
+import logging
 from app.core.constants import ESTADO_RESPONDIDO
 from app.models.survey import PreguntaEncuesta, RespuestaEncuesta, RespuestaPregunta, EntregaEncuesta, RespuestaTemp
 from app.schemas.respuestas_schema import RespuestaEncuestaCreate, RespuestaEncuestaUpdate, RespuestaPreguntaCreate
 from app.services.shared_service import get_entrega_con_plantilla, mark_as_responded
-
+logger = logging.getLogger(__name__)
 def validate_entrega_status(db: Session, entrega_id: UUID) -> EntregaEncuesta:
     """Valida que la entrega exista y pueda recibir respuestas"""
     entrega = (
