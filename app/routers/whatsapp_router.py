@@ -29,12 +29,7 @@ from app.services.conversacion_service import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
-# cache sencillo en memoria (en prod → redis)
 conversaciones_estado: Dict[str, str] = {}
-
-# --------------------------------------------------------------------------- #
-# HELPERS
-# --------------------------------------------------------------------------- #
 
 
 def _render_multiselect_text(pregunta: PreguntaEncuesta) -> str:
@@ -85,24 +80,17 @@ async def _send_next(db: Session, res: Dict, chat_id: str) -> None:
         await ws.send_text(chat_id, res["siguiente_pregunta"])
 
 
-# --------------------------------------------------------------------------- #
-# ENDPOINT PRINCIPAL
-# --------------------------------------------------------------------------- #
-
-
 @router.post("/webhook")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # ------------------------------------------------ cuerpo + parser
     payload = json.loads((await request.body()).decode())
     data = parse_webhook(payload)
 
-    # --- verificación Whapi
     if payload.get("hubVerificationToken"):
         if payload["hubVerificationToken"] == settings.WHAPI_TOKEN:
             return {"success": True, "message": "Webhook verified"}
         raise HTTPException(status_code=403, detail="Invalid verification token")
 
-    # --- ignorados
     if data["kind"] in ("status", "own", "non_text", "unknown"):
         return {"success": True, "message": f"Ignored {data['kind']}"}
 
@@ -110,7 +98,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         logger.error("Parser error: %s", data["error"])
         return {"success": False, "error": data["error"]}
 
-    # ------------------------------------------------ datos esenciales
     numero = data["from_number"]
     texto = data["text"].strip()
     payload_id = data.get("payload_id", "")
@@ -119,15 +106,11 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     estado = conversaciones_estado.get(chat_id, "esperando_confirmacion")
     logger.info("Mensaje de %s | estado=%s | %s", numero, estado, texto)
 
-    # ------------------------------------------------ localizar entrega pendiente
     entrega: EntregaEncuesta | None = get_entrega_by_destinatario(db, telefono=numero)
     if not entrega or entrega.estado_id == 3:  # respondido
         await ws.send_text(chat_id, "No tengo encuestas pendientes para este número 😊")
         return {"success": True, "message": "No pending delivery"}
 
-    # ------------------------------------------------------------------ #
-    # ESTADO: esperando_confirmacion
-    # ------------------------------------------------------------------ #
     if estado == "esperando_confirmacion":
         normalized = texto.lower().replace("í", "i")
         confirmado = normalized in ("si", "yes", "ok") or payload_id == "btn_si"
@@ -149,9 +132,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         )
         return {"success": True, "message": "Confirmation requested"}
 
-    # ------------------------------------------------------------------ #
-    # ESTADO: encuesta_en_progreso
-    # ------------------------------------------------------------------ #
     if estado == "encuesta_en_progreso":
         try:
             conv = (
@@ -162,23 +142,19 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
             resultado = await procesar_respuesta(db, conv.id, texto)
 
-            # 🔹 1. Requiere aclaración, NO avanzar de pregunta
             if resultado.get("retry"):
                 await ws.send_text(chat_id, resultado["mensaje"])
                 return {"success": True, "message": "Clarification requested"}
 
-            # 🔹 2. Error de validación (número inválido, etc.)
             if "error" in resultado:
                 await ws.send_text(chat_id, resultado["error"])
                 return {"success": True, "message": "Invalid answer"}
 
-            # 🔹 3. Encuesta completada
             if resultado.get("completada"):
                 conversaciones_estado.pop(chat_id, None)
                 await ws.send_text(chat_id, "¡Gracias por completar la encuesta! 😊")
                 return {"success": True, "message": "Survey finished"}
 
-            # 🔹 4. Enviar siguiente pregunta
             await _send_next(db, resultado, chat_id)
             return {"success": True, "message": "Next question sent"}
 
@@ -187,9 +163,6 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             await ws.send_text(chat_id, "Ocurrió un error. Escribe INICIAR para reiniciar.")
             return {"success": False, "error": "exception"}
 
-    # ------------------------------------------------------------------ #
-    # Comando INICIAR — reinicia confirmación
-    # ------------------------------------------------------------------ #
     if texto.upper() == "INICIAR":
         conversaciones_estado[chat_id] = "esperando_confirmacion"
         nombre = entrega.destinatario.nombre or "Hola"
@@ -199,17 +172,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         )
         return {"success": True, "message": "Confirmation requested"}
 
-    # ------------------------------------------------------------------ #
-    # default → pedir INICIAR
-    # ------------------------------------------------------------------ #
     await ws.send_text(chat_id, "Para iniciar o continuar la encuesta escribe INICIAR.")
     conversaciones_estado[chat_id] = "esperando_confirmacion"
     return {"success": True, "message": "State reset"}
 
-
-# --------------------------------------------------------------------------- #
-# UTILIDADES DE MONITOREO / DEBUG
-# --------------------------------------------------------------------------- #
 
 
 @router.get("/webhook")

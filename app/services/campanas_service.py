@@ -24,7 +24,7 @@ def create_campana(db: Session, payload: CampanaCreate, suscriptor_id: UUID) -> 
     campana = CampanaEncuesta(
         **payload.model_dump(),
         suscriptor_id=suscriptor_id,
-        estado_id=ESTADO_BORRADOR  # Estado inicial siempre es borrador
+        estado_id=ESTADO_BORRADOR  
     )
     db.add(campana)
     db.commit()
@@ -43,7 +43,7 @@ def validate_estado_transition(estado_actual: int, nuevo_estado: int):
         ESTADO_BORRADOR: [ESTADO_PROGRAMADA],
         ESTADO_PROGRAMADA: [ESTADO_ENVIADA, ESTADO_BORRADOR],
         ESTADO_ENVIADA: [ESTADO_CERRADA],
-        ESTADO_CERRADA: []  # Estado final
+        ESTADO_CERRADA: [] 
     }
     
     if nuevo_estado not in transiciones_validas.get(estado_actual, []):

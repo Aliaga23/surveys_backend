@@ -113,9 +113,8 @@ class RespuestaPregunta(Base):
     texto        = Column(Text)
     numero       = Column(Numeric)
     opcion_id    = Column(PGUUID(as_uuid=True), ForeignKey("opcion_encuesta.id", ondelete="SET NULL"))
-    metadatos    = Column(JSONB, default=lambda: {})  # Cambié metadata por metadatos
+    metadatos    = Column(JSONB, default=lambda: {}) 
 
-    # Relaciones
     respuesta = relationship("RespuestaEncuesta", back_populates="respuestas_preguntas")
 
 class ConversacionEncuesta(Base):
@@ -127,7 +126,6 @@ class ConversacionEncuesta(Base):
     completada = Column(Boolean, default=False)
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
-    # Relaciones
     entrega = relationship("EntregaEncuesta", back_populates="conversacion")
     pregunta_actual = relationship("PreguntaEncuesta")
 

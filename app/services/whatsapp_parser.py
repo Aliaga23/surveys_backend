@@ -4,10 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# --------------------------------------------------------------------------- #
-# HELPERS
-# --------------------------------------------------------------------------- #
-
 def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
     """
     Devuelve (texto_visible, payload_id) a partir de un dict ``msg``.
@@ -15,12 +11,10 @@ def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
     """
     mtype = msg.get("type")
 
-    # ---- 1) Botón “template” directo (API clásica) -------------------------
-    if mtype == "button":                 # Android / iOS direct
+    if mtype == "button":                 #
         btn = msg.get("button", {})
         return btn.get("text", ""), btn.get("payload", "")
 
-    # ---- 2) Formato “interactive” de la Cloud API --------------------------
     if mtype == "interactive":
         data = msg.get("interactive", {})
         if data.get("type") == "button_reply":
@@ -30,7 +24,6 @@ def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
             lr = data["list_reply"]
             return lr.get("title", ""), lr.get("id", "")
 
-    # ---- 3) NUEVO: Formato “reply” (UI móvil al pulsar botón / lista) ------
     if mtype == "reply":
         rep = msg.get("reply", {})
         if rep.get("type") == "buttons_reply":
@@ -40,15 +33,12 @@ def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
             lr = rep["list_reply"]
             return lr.get("title", ""), lr.get("id", "")
 
-    # ---- 4) iOS reenvía interactivo como “text” + context ------------------
     if mtype == "text" and msg.get("context", {}).get("id"):
         return msg["text"]["body"], ""            # payload vacío, texto visible
 
-    # ---- 5) Texto plano normal --------------------------------------------
     if mtype == "text":
         return msg["text"]["body"], ""
 
-    # ---- 6) Cualquier otro tipo (imagen, audio, etc.) ----------------------
     return "", ""
 
 
@@ -75,20 +65,16 @@ def parse_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "raw": payload,
             }
 
-        # 1) No hay mensajes
         if "messages" not in payload or not payload["messages"]:
             return {"kind": "unknown", "raw": payload}
 
         msg = payload["messages"][0]
 
-        # 2) Mensaje enviado por nosotros
         if msg.get("from_me", False):
             return {"kind": "own", "raw": payload}
 
-        # 3) Extraer texto y/o payload
         text, payload_id = _extract_text_and_payload(msg)
 
-        # 4) Nada útil (p.e. sticker, imagen…)
         if not text and not payload_id:
             return {
                 "kind": "non_text",
@@ -96,7 +82,6 @@ def parse_webhook(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "raw": payload,
             }
 
-        # 5) Mensaje válido de usuario
         interactive_types = {"button", "interactive", "reply"}
         return {
             "kind": "message",

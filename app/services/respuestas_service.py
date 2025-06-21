@@ -120,7 +120,6 @@ async def crear_respuesta_encuesta(
     if not entrega:
         raise ValueError(f"Entrega {entrega_id} no encontrada")
     
-    # Obtener todas las preguntas de la plantilla ordenadas
     preguntas = (
         db.query(PreguntaEncuesta)
         .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
@@ -133,17 +132,12 @@ async def crear_respuesta_encuesta(
         raise ValueError("No hay preguntas en la plantilla")
     
     logger.info(f"Se encontraron {len(preguntas)} preguntas en la plantilla")
-    
-    # Analizar el historial para identificar pares de pregunta-respuesta
-    # Cada vez que el asistente hace una pregunta y el usuario responde,
-    # guardamos ese par para procesarlo después
+   
     pares_pregunta_respuesta = []
     
-    # Imprimir todo el historial para depuración
     for i, msg in enumerate(historial):
         logger.debug(f"Mensaje {i}: {msg.get('role')[:5]} - {msg.get('content', '')[:50]}...")
     
-    # Iterar por todos los mensajes del asistente para encontrar preguntas
     for i, mensaje in enumerate(historial):
         if mensaje.get('role') == 'assistant':
             # Identificar qué pregunta está haciendo el asistente
@@ -165,13 +159,11 @@ async def crear_respuesta_encuesta(
     
     logger.info(f"Se identificaron {len(pares_pregunta_respuesta)} pares pregunta-respuesta")
     
-    # Crear las respuestas individuales para cada pregunta
     respuestas_preguntas = []
     
     for pregunta, respuesta_texto in pares_pregunta_respuesta:
         logger.debug(f"Procesando respuesta para pregunta: {pregunta.texto[:30]}...")
         
-        # Procesar según tipo de pregunta
         if pregunta.tipo_pregunta_id == 1:  # Texto
             respuesta_pregunta = RespuestaPreguntaCreate(
                 pregunta_id=pregunta.id,
@@ -246,11 +238,9 @@ async def crear_respuesta_encuesta(
                 logger.debug(f"Guardando como TEXTO (opción no encontrada)")
                 
         elif pregunta.tipo_pregunta_id == 4:  # Multiselect
-            # Para multiselect, dividir por comas y buscar opciones
             selecciones = [s.strip().lower() for s in respuesta_texto.split(',')]
             opciones_encontradas = []
             
-            # Buscar coincidencias para cada selección
             for seleccion in selecciones:
                 for opcion in pregunta.opciones:
                     if seleccion == opcion.texto.lower() or seleccion in opcion.texto.lower():
@@ -288,10 +278,8 @@ async def crear_respuesta_encuesta(
     logger.info(f"Creando respuesta final con {len(respuestas_preguntas)} respuestas")
     
     try:
-        # Crear la respuesta en la base de datos
         respuesta = create_respuesta(db, entrega_id, respuesta_schema)
         
-        # Marcar la entrega como respondida
         mark_as_responded(db, entrega_id)
         
         logger.info(f"Respuesta creada correctamente con ID: {respuesta.id}")
