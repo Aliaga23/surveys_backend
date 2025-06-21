@@ -237,7 +237,7 @@ async def request_registration(
     )
 
     # 4. Armar el link
-    url_verificacion = f"{settings.FRONTEND_URL}/auth/verify-registration?token={token}"
+    url_verificacion = f"{settings.FRONTEND_URL}/verify-registration?token={token}"
 
     # 5. Enviar el email
     from app.services.email_service import enviar_email_verificacion
