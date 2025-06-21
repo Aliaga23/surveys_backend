@@ -1,7 +1,10 @@
 # app/services/conversacion_service.py
 from __future__ import annotations
 
-import json, logging, re, unicodedata
+import json
+import logging
+import re
+import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
 from uuid import UUID
@@ -19,7 +22,7 @@ from app.models.survey import (
     RespuestaEncuesta,
     RespuestaPregunta,
 )
-from app.services.entregas_service import mark_as_responded  # ⬅️ NUEVO
+from app.services.entregas_service import mark_as_responded
 from app.services.respuestas_service import crear_respuesta_encuesta
 from app.services.shared_service import get_entrega_con_plantilla
 
@@ -39,72 +42,85 @@ def _norm(txt: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# DESAMBIGUAR OPCIONES
+# GPT PROMPT BUILDER
 # --------------------------------------------------------------------------- #
-# ---------- helper _match_opcion_ai (usa GPT SOLO en múltiple) ----------- #
-# --------------------------- GPT helper ---------------------------------- #
-# (solo toca ESTA función)
+
+
+def _build_prompt(respuesta: str, opciones: List[str], multiple: bool) -> List[Dict]:
+    """
+    Crea los mensajes para ChatCompletion.
+    GPT debe responder SOLO un JSON: {"indices":[...], "confidence":0-1}
+    Si no puede decidir con seguridad, indices = [] y confidence = 0.
+    """
+    lista = "\n".join(f"{i}. {op}" for i, op in enumerate(opciones, 1))
+    system = (
+        "Eres un parser JSON. Devuelve exclusivamente un JSON con las claves "
+        '"indices" (lista de enteros base-0) y "confidence" (0-1). '
+        "Si no estás seguro, deja indices como [] y confidence = 0."
+    )
+    user = (
+        f"Opciones posibles:\n{lista}\n\n"
+        f"Mensaje del usuario:\n\"{respuesta}\"\n\n"
+        f"{'Puede haber varias opciones.' if multiple else 'Sólo una opción.'}"
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# DESAMBIGUAR OPCIONES (IA PRIMERO)
+# --------------------------------------------------------------------------- #
+
 
 async def _match_opcion_ai(
     respuesta: str,
     opciones: List[str],
     multiple: bool,
-) -> Tuple[Any, str]:
+) -> Tuple[Any | None, str | None]:
     """
-    • tipo 3  → primero intento rápido (texto ► índice / número “1-based”),
-                si falla le pregunto a GPT.
-    • tipo 4  → SIEMPRE le pregunto a GPT.
-    Devuelve int (tipo 3) o List[int] (tipo 4).  Si no reconoce ⇒ (None, error)
+    Devuelve:
+      • índices válidos  → interpretación aceptada.
+      • None + msg       → pedir aclaración al usuario (no avanza).
+    Nunca lanza excepción que corte la conversación.
     """
-
-    # ---------- INTENTO RÁPIDO PARA TIPO-3 ------------------------------- #
-    if not multiple:
-        n_resp = _norm(respuesta)
-        for i, op in enumerate(opciones):
-            if n_resp == _norm(op):
-                return i, ""
-        for n in [int(x) - 1 for x in re.findall(r"\b\d+\b", respuesta)]:
-            if 0 <= n < len(opciones):
-                return n, ""
-        # → si nada, continúa a GPT
-
-    # ---------------------- GPT (multiselección o fallback) --------------- #
-    prompt = (
-        "Te doy la lista de opciones con su índice (empieza en 0):\n" +
-        "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones)) +
-        "\n\nRespuesta del usuario:\n" + respuesta +
-        "\n\nDevuélveme **SOLO** los índices (0-based) " +
-        ("separados por coma" if multiple else "") +
-        ".  Si no reconoces nada responde EXACTAMENTE 'ERROR'."
-    )
-
+    # ---------- 1.  GPT primero ------------------------------------------ #
     try:
-        gpt = await client.chat.completions.create(
-            # usa 3.5 para evitar límites de cuenta; cámbialo si tienes acceso
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
+        chat = await client.chat.completions.create(
+            model="gpt-4o-mini",  # usa el modelo que tengas habilitado
+            messages=_build_prompt(respuesta, opciones, multiple),
             temperature=0.0,
-            max_tokens=20,
+            timeout=8,
         )
-        txt = gpt.choices[0].message.content.strip()
+        raw = chat.choices[0].message.content.strip()
+        data = json.loads(raw)
 
-        if txt.upper().startswith("ERROR"):
-            return None, "No pude identificar tu selección. Intenta nuevamente."
+        idxs = data.get("indices", [])
+        conf = float(data.get("confidence", 0))
 
-        idxs = [int(n) for n in re.findall(r"\d+", txt)]
-
-        if multiple:
-            buenos = [i for i in idxs if 0 <= i < len(opciones)]
-            return buenos if buenos else (None, "No reconocí las opciones escritas."), ""
-        else:
-            return idxs[0], "" if idxs and 0 <= idxs[0] < len(opciones) else (
-                None, "No reconocí la opción escrita."
-            )
+        if idxs and conf >= 0.5:
+            if multiple:
+                idxs = [i for i in idxs if 0 <= i < len(opciones)]
+                return (idxs, None) if idxs else (None, "No reconocí las opciones.")
+            else:
+                i = idxs[0]
+                return (i, None) if 0 <= i < len(opciones) else (
+                    None,
+                    "No reconocí la opción.",
+                )
 
     except Exception as exc:
-        logger.warning("GPT falló: %s", exc)
-        return None, "Hubo un problema al interpretar la respuesta. Intenta otra vez."
+        logger.warning("GPT falló o respondió mal: %s", exc)
 
+    # ---------- 2.  IA no decidió → pedir aclaración --------------------- #
+    texto = (
+        "No entendí tu elección 🤔.\n"
+        "Por favor escribe nuevamente "
+        f"{'una o varias' if multiple else 'una'} de las siguientes opciones:\n"
+        + "\n".join(f"- {op}" for op in opciones)
+    )
+    return None, texto
 
 
 # --------------------------------------------------------------------------- #
@@ -153,7 +169,7 @@ async def procesar_respuesta(
     if not pregunta:
         raise ValueError("Pregunta actual no encontrada")
 
-    # -------- validar ----------------------------------------------------- #
+    # -------- validar entrada -------------------------------------------- #
     if pregunta.tipo_pregunta_id == 1:  # texto libre
         valor = respuesta
 
@@ -161,16 +177,17 @@ async def procesar_respuesta(
         try:
             valor = float(respuesta.strip())
         except ValueError:
-            return {"error": "Por favor ingresa un número válido."}
+            return {"retry": True, "mensaje": "Por favor ingresa un número válido."}
 
-    else:  # opciones
-        valor, err = await _match_opcion_ai(
+    else:  # opciones (tipo 3 y 4)
+        valor, msg = await _match_opcion_ai(
             respuesta,
             [o.texto for o in pregunta.opciones],
             multiple=(pregunta.tipo_pregunta_id == 4),
         )
-        if err:
-            return {"error": err}
+        if valor is None:
+            # Pedir aclaración sin avanzar
+            return {"retry": True, "mensaje": msg}
 
     # --------------------------------------------------------------------- #
     #  GUARDAR RESPUESTA EN BD
@@ -190,13 +207,13 @@ async def procesar_respuesta(
         det = RespuestaPregunta(
             respuesta_id=r_enc.id,
             pregunta_id=pregunta.id,
-            texto=valor,
+            texto=valor,  # type: ignore[arg-type]
         )
     elif pregunta.tipo_pregunta_id == 2:
         det = RespuestaPregunta(
             respuesta_id=r_enc.id,
             pregunta_id=pregunta.id,
-            numero=valor,
+            numero=valor,  # type: ignore[arg-type]
         )
     elif pregunta.tipo_pregunta_id == 3:
         det = RespuestaPregunta(
@@ -235,7 +252,6 @@ async def procesar_respuesta(
         conv.completada = True
         db.commit()
 
-        # marcar la entrega como RESPONDIDA (estado 3)
         mark_as_responded(db, conv.entrega_id)
 
         resumen = await crear_respuesta_encuesta(
