@@ -227,16 +227,19 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                 logger.info(f"Enviando siguiente pregunta a {numero}")
                 
                 # Enviar pregunta con opciones si existen
-                if resultado.get("opciones"):
+                if resultado.get("opciones") and resultado.get("tipo_pregunta") == 3:  # Tipo 3 = selección única
                     await enviar_mensaje_whatsapp(
                         chat_id, 
                         resultado["siguiente_pregunta"], 
-                        resultado["opciones"]
+                        resultado["opciones"],
+                        tipo_mensaje="opciones"  # Usar formato interactivo para opciones
                     )
                 else:
+                    # Para otros tipos de preguntas usar formato normal
                     await enviar_mensaje_whatsapp(
                         chat_id, 
-                        resultado["siguiente_pregunta"]
+                        resultado["siguiente_pregunta"],
+                        resultado.get("opciones")
                     )
                     
                 return {"success": True, "message": "Next question sent"}
@@ -258,11 +261,15 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             # Actualizar estado
             conversaciones_estado[chat_id] = 'esperando_confirmacion'
             
-            # Mensaje personalizado de bienvenida
+            # Mensaje personalizado de bienvenida con botones Sí/No
             nombre = entrega.destinatario.nombre or "Hola"
-            mensaje = f"{nombre}, estamos a punto de iniciar la encuesta '{entrega.campana.nombre}'. ¿Deseas comenzar ahora? Responde SÍ para iniciar."
+            mensaje = f"{nombre}, estamos a punto de iniciar la encuesta '{entrega.campana.nombre}'. ¿Deseas comenzar ahora?"
             
-            await enviar_mensaje_whatsapp(chat_id, mensaje)
+            await enviar_mensaje_whatsapp(
+                chat_id,
+                mensaje,
+                tipo_mensaje="confirmacion"  # Especificar tipo confirmación para botones Sí/No
+            )
             return {"success": True, "message": "Confirmation requested"}
             
         # Estado desconocido o cualquier otro mensaje, reiniciar

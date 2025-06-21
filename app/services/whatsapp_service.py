@@ -2,8 +2,7 @@ import httpx
 import logging
 import re
 import json
-from typing import List, Optional, Dict, Any
-from fastapi import HTTPException, status
+from typing import List, Optional, Dict, Any, Union
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -11,10 +10,20 @@ logger = logging.getLogger(__name__)
 async def enviar_mensaje_whatsapp(
     numero_destino: str, 
     mensaje: str, 
-    opciones: Optional[List[str]] = None
+    opciones: Optional[List[str]] = None,
+    tipo_mensaje: str = "normal"  # Puede ser "normal", "confirmacion", "opciones"
 ) -> Dict:
     """
     Envía un mensaje por WhatsApp usando la API de Whapi.
+    
+    Args:
+        numero_destino: Número de teléfono del destinatario
+        mensaje: Texto del mensaje
+        opciones: Lista de opciones para mostrar (opcional)
+        tipo_mensaje: Tipo de mensaje a enviar ("normal", "confirmacion", "opciones")
+    
+    Returns:
+        Dict con información sobre el resultado del envío
     """
     try:
         # Normalizar número de teléfono (eliminar @c.us si existe)
@@ -32,27 +41,120 @@ async def enviar_mensaje_whatsapp(
             "Content-Type": "application/json"
         }
         
-        # Construir el payload según si hay opciones o no
-        if opciones and len(opciones) > 0:
-            # Mensaje con botones
-            url = f"{settings.WHAPI_API_URL}/messages/interactive/buttons"
+        # Determinar URL base
+        api_url = settings.WHAPI_API_URL or "https://gate.whapi.cloud"
+        
+        # Construir el payload según el tipo de mensaje
+        if tipo_mensaje == "confirmacion":
+            # Mensaje de confirmación Sí/No para iniciar encuesta
+            url = f"{api_url}/messages/interactive"
             payload = {
                 "to": numero_destino,
-                "body": mensaje,  # Aquí está el parámetro 'body' para botones
-                "buttons": [{"id": f"btn_{i}", "text": opcion} for i, opcion in enumerate(opciones)]
+                "type": "button",
+                "header": {
+                    "text": "Encuesta"
+                },
+                "body": {
+                    "text": mensaje
+                },
+                "footer": {
+                    "text": "Por favor responde para continuar"
+                },
+                "action": {
+                    "buttons": [
+                        {
+                            "type": "quick_reply",
+                            "title": "Sí",
+                            "id": "btn_si"
+                        },
+                        {
+                            "type": "quick_reply",
+                            "title": "No",
+                            "id": "btn_no"
+                        }
+                    ]
+                }
             }
+        elif tipo_mensaje == "opciones" and opciones and len(opciones) > 0:
+            # Mensaje con opciones múltiples para preguntas tipo 3
+            url = f"{api_url}/messages/interactive"
+            
+            # Preparar botones para todas las opciones
+            botones = []
+            for i, opcion in enumerate(opciones):
+                # Limitar la longitud del título a 20 caracteres (límite de WhatsApp)
+                titulo = opcion[:20] if len(opcion) > 20 else opcion
+                botones.append({
+                    "type": "quick_reply",
+                    "title": titulo,
+                    "id": f"btn_{i}"
+                })
+                
+            payload = {
+                "to": numero_destino,
+                "type": "button",
+                "header": {
+                    "text": "Selección"
+                },
+                "body": {
+                    "text": mensaje
+                },
+                "footer": {
+                    "text": "Selecciona una opción"
+                },
+                "action": {
+                    "buttons": botones[:3]  # Máximo 3 botones permitidos
+                }
+            }
+            
+            # Si hay más de 3 opciones, necesitamos manejarlas diferentemente
+            if len(opciones) > 3:
+                # Cambiamos a tipo lista que permite más opciones
+                payload = {
+                    "to": numero_destino,
+                    "type": "list",
+                    "header": {
+                        "text": "Selección"
+                    },
+                    "body": {
+                        "text": mensaje
+                    },
+                    "footer": {
+                        "text": "Haz clic para ver las opciones"
+                    },
+                    "action": {
+                        "list": {
+                            "sections": [
+                                {
+                                    "title": "Opciones disponibles",
+                                    "rows": [
+                                        {
+                                            "id": f"opt_{i}",
+                                            "title": opcion[:24]  # Limitar longitud
+                                        } for i, opcion in enumerate(opciones)
+                                    ]
+                                }
+                            ],
+                            "label": "Ver opciones"
+                        }
+                    }
+                }
         else:
             # Mensaje de texto simple
-            url = f"{settings.WHAPI_API_URL}/messages/text"
-            # Para mensajes de texto simples, también usar 'body' en lugar de 'message'
+            url = f"{api_url}/messages/text"
             payload = {
                 "to": numero_destino,
-                "body": mensaje  # Cambiado de 'message' a 'body' para consistencia
+                "body": mensaje
             }
+            
+            # Si hay opciones pero no es tipo "opciones", añadir al texto
+            if opciones and len(opciones) > 0:
+                opciones_texto = "\n".join([f"• {i+1}. {opcion}" for i, opcion in enumerate(opciones)])
+                payload["body"] += f"\n\nOpciones disponibles:\n{opciones_texto}"
         
         # Debug: mostrar URL y payload
         logger.debug(f"URL: {url}")
-        logger.debug(f"Payload: {json.dumps(payload)}")
+        logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
         
         # Enviar el mensaje
         async with httpx.AsyncClient() as client:
