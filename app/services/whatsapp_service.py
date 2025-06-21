@@ -1,50 +1,140 @@
 import httpx
 import logging
-from typing import List, Optional
+import re
+import json
+from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 async def enviar_mensaje_whatsapp(
-    chat_id: str, 
+    numero_destino: str, 
     mensaje: str, 
     opciones: Optional[List[str]] = None
-):
+) -> Dict:
     """
-    Envía un mensaje usando gate.whapi.cloud con opciones si existen
+    Envía un mensaje por WhatsApp usando la API de Whapi.
+    
+    Args:
+        numero_destino: Número de teléfono del destinatario
+        mensaje: Texto del mensaje
+        opciones: Lista de opciones para mostrar (opcional)
+    
+    Returns:
+        Dict con información sobre el resultado del envío
     """
-   
-    # Formatear el mensaje con las opciones si existen
-    mensaje_completo = mensaje
-    if opciones and len(opciones) > 0:
-        mensaje_completo += "\n\nOpciones disponibles:\n" + "\n".join(f"• {opcion}" for opcion in opciones)
-    
-    print(f"Enviando mensaje a {chat_id}: {mensaje_completo[:30]}...")
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{settings.WHAPI_API_URL}/messages/text",
-                headers={
-                    "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "to": chat_id,  # Según documentación de Whapi
-                    "body": mensaje_completo  # Según documentación de Whapi
-                },
-                timeout=10.0
-            )
+    try:
+        # Normalizar número de teléfono (eliminar @c.us si existe)
+        if '@' in numero_destino:
+            numero_destino = numero_destino.split('@')[0]
+        
+        # Eliminar espacios y caracteres especiales
+        numero_destino = re.sub(r'[^0-9]', '', numero_destino)
+        
+        # Formatear el mensaje con las opciones si existen
+        mensaje_completo = mensaje
+        if opciones and len(opciones) > 0:
+            mensaje_completo += "\n\nOpciones disponibles:"
+            for i, opcion in enumerate(opciones, 1):
+                mensaje_completo += f"\n{i}. {opcion}"
+        
+        logger.info(f"Enviando mensaje a {numero_destino}: {mensaje_completo[:50]}...")
+        
+        # Preparar la petición según la documentación de Whapi
+        url = f"{settings.WHAPI_URL}/messages/text"
+        headers = {
+            "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        # Construir el payload según la documentación
+        payload = {
+            "phone": numero_destino,  # Solo el número sin @c.us
+            "message": mensaje_completo
+        }
+        
+        # Si hay opciones, añadirlas como botones interactivos
+        if opciones and len(opciones) > 0:
+            url = f"{settings.WHAPI_URL}/messages/interactive/buttons"
+            payload = {
+                "to": numero_destino,
+                "body": mensaje,
+                "buttons": [{"id": f"btn_{i}", "text": opcion} for i, opcion in enumerate(opciones)]
+            }
+        
+        # Enviar el mensaje
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers, timeout=15.0)
             
-            # Log para depuración
-            print(f"Respuesta de Whapi - Status: {response.status_code}")
+            # Log de la respuesta
             if response.status_code != 200:
-                print(f"Error en respuesta: {response.text}")
+                logger.error(f"Error enviando mensaje: {response.status_code} - {response.text}")
+                return {"success": False, "error": response.text}
             
-            response.raise_for_status()
-            return response.json()
+            response_data = response.json()
+            logger.info(f"Mensaje enviado correctamente: {response_data.get('id', 'unknown')}")
             
-        except Exception as e:
-            print(f"Error enviando mensaje: {str(e)}")
-            raise e
+            return {
+                "success": True, 
+                "message_id": response_data.get("id"),
+                "response": response_data
+            }
+            
+    except Exception as e:
+        logger.exception(f"Error enviando mensaje WhatsApp: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+async def procesar_webhook_whatsapp(payload: Dict) -> Dict:
+    """
+    Procesa un webhook recibido de Whapi y extrae la información relevante.
+    
+    Args:
+        payload: Payload completo del webhook
+    
+    Returns:
+        Dict con información estructurada del mensaje
+    """
+    try:
+        # Verificar si es un mensaje de estado
+        if "statuses" in payload:
+            return {
+                "tipo": "estado",
+                "detalles": payload.get("statuses", [{}])[0] if payload.get("statuses") else {}
+            }
+            
+        # Verificar si es un mensaje
+        if "messages" not in payload or not payload["messages"]:
+            return {"tipo": "desconocido", "detalles": {}}
+            
+        mensaje = payload["messages"][0]
+        
+        # Si es un mensaje enviado por nosotros mismos
+        if mensaje.get("from_me", False):
+            return {"tipo": "propio", "detalles": mensaje}
+        
+        # Si no es un mensaje de texto
+        if mensaje.get("type") != "text":
+            return {
+                "tipo": "no_texto",
+                "subtipo": mensaje.get("type", "desconocido"),
+                "detalles": mensaje
+            }
+        
+        # Es un mensaje de texto válido
+        numero = mensaje.get("from", "").split("@")[0] if "@" in mensaje.get("from", "") else mensaje.get("from", "")
+        texto = mensaje.get("text", {}).get("body", "")
+        
+        return {
+            "tipo": "mensaje",
+            "numero": numero,
+            "texto": texto,
+            "mensaje_id": mensaje.get("id"),
+            "timestamp": mensaje.get("timestamp"),
+            "detalles": mensaje
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error procesando webhook: {str(e)}")
+        return {"tipo": "error", "error": str(e)}

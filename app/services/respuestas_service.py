@@ -2,7 +2,7 @@ from typing import List, Optional, Dict
 from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 from datetime import datetime
-from fastapi import HTTPException, status
+from fastapi import HTTPException, logger, status
 from thefuzz import fuzz
 
 from app.core.constants import ESTADO_RESPONDIDO
@@ -114,11 +114,11 @@ async def crear_respuesta_encuesta(
     """
     Crea una respuesta de encuesta a partir del historial de conversación
     """
-    print(f"Creando respuesta de encuesta para entrega: {entrega_id}")
+    logger.info(f"Creando respuesta de encuesta para entrega: {entrega_id}")
     
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega:
-        raise ValueError("Entrega no encontrada")
+        raise ValueError(f"Entrega {entrega_id} no encontrada")
     
     # Obtener todas las preguntas de la plantilla ordenadas
     preguntas = (
@@ -132,152 +132,171 @@ async def crear_respuesta_encuesta(
     if not preguntas:
         raise ValueError("No hay preguntas en la plantilla")
     
-    print(f"Se encontraron {len(preguntas)} preguntas en la plantilla")
+    logger.info(f"Se encontraron {len(preguntas)} preguntas en la plantilla")
     
-    # Mapear preguntas por ID para acceso fácil
-    preguntas_map = {str(p.id): p for p in preguntas}
-    
-    # Mapear texto de pregunta a ID
-    preguntas_texto_map = {p.texto.lower(): p for p in preguntas}
-    
-    # Identificar preguntas y respuestas en el historial
+    # Analizar el historial para identificar pares de pregunta-respuesta
+    # Cada vez que el asistente hace una pregunta y el usuario responde,
+    # guardamos ese par para procesarlo después
     pares_pregunta_respuesta = []
-    pregunta_actual = None
     
+    # Imprimir todo el historial para depuración
+    for i, msg in enumerate(historial):
+        logger.debug(f"Mensaje {i}: {msg.get('role')[:5]} - {msg.get('content', '')[:50]}...")
+    
+    # Iterar por todos los mensajes del asistente para encontrar preguntas
     for i, mensaje in enumerate(historial):
-        print(f"Procesando mensaje {i}: {mensaje.get('role')} - {mensaje.get('content')[:30]}...")
-        
         if mensaje.get('role') == 'assistant':
-            # Buscar qué pregunta está haciendo el asistente
-            texto = mensaje.get('content', '').lower()
+            # Identificar qué pregunta está haciendo el asistente
+            texto_asistente = mensaje.get('content', '').lower()
+            pregunta_identificada = None
             
-            # Intentar encontrar la pregunta por su texto exacto o parcial
-            pregunta_encontrada = None
-            for p in preguntas:
-                if p.texto.lower() in texto:
-                    pregunta_encontrada = p
+            # Buscar la pregunta más similar en el texto del asistente
+            for pregunta in preguntas:
+                if pregunta.texto.lower() in texto_asistente:
+                    pregunta_identificada = pregunta
+                    logger.debug(f"Pregunta identificada en mensaje {i}: {pregunta.texto[:30]}...")
                     break
             
-            if pregunta_encontrada:
-                pregunta_actual = pregunta_encontrada
-                print(f"Pregunta identificada en mensaje {i}: {pregunta_actual.texto[:30]}...")
-        
-        elif mensaje.get('role') == 'user' and pregunta_actual:
-            # Este es una respuesta a la pregunta anterior
-            respuesta = mensaje.get('content', '')
-            pares_pregunta_respuesta.append((pregunta_actual, respuesta))
-            print(f"Respuesta encontrada en mensaje {i}: {respuesta[:30]}...")
-            # No resetear pregunta_actual para manejar casos donde no se identifica bien la siguiente pregunta
+            # Si encontramos una pregunta y hay un mensaje de usuario después
+            if pregunta_identificada and i + 1 < len(historial) and historial[i + 1].get('role') == 'user':
+                respuesta_texto = historial[i + 1].get('content', '')
+                pares_pregunta_respuesta.append((pregunta_identificada, respuesta_texto))
+                logger.debug(f"Respuesta asociada: {respuesta_texto[:30]}...")
     
-    print(f"Se encontraron {len(pares_pregunta_respuesta)} pares de pregunta-respuesta")
+    logger.info(f"Se identificaron {len(pares_pregunta_respuesta)} pares pregunta-respuesta")
     
-    # Preparar las respuestas para el esquema
+    # Crear las respuestas individuales para cada pregunta
     respuestas_preguntas = []
     
     for pregunta, respuesta_texto in pares_pregunta_respuesta:
-        print(f"Procesando respuesta para pregunta: {pregunta.texto[:30]}...")
+        logger.debug(f"Procesando respuesta para pregunta: {pregunta.texto[:30]}...")
         
         # Procesar según tipo de pregunta
         if pregunta.tipo_pregunta_id == 1:  # Texto
-            respuestas_preguntas.append(
-                RespuestaPreguntaCreate(
+            respuesta_pregunta = RespuestaPreguntaCreate(
+                pregunta_id=pregunta.id,
+                texto=respuesta_texto,
+                numero=None,
+                opcion_id=None
+            )
+            respuestas_preguntas.append(respuesta_pregunta)
+            logger.debug(f"Guardando respuesta TEXTO")
+            
+        elif pregunta.tipo_pregunta_id == 2:  # Número
+            try:
+                # Intentar convertir a número
+                numero = float(respuesta_texto.strip())
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=None,
+                    numero=numero,
+                    opcion_id=None
+                )
+                respuestas_preguntas.append(respuesta_pregunta)
+                logger.debug(f"Guardando respuesta NÚMERO: {numero}")
+            except ValueError:
+                # Si no es un número válido, guardar como texto
+                respuesta_pregunta = RespuestaPreguntaCreate(
                     pregunta_id=pregunta.id,
                     texto=respuesta_texto,
                     numero=None,
                     opcion_id=None
                 )
-            )
-            print(f"Guardando respuesta TEXTO: {respuesta_texto[:30]}...")
-        
-        elif pregunta.tipo_pregunta_id == 2:  # Número
-            try:
-                numero = float(respuesta_texto.strip())
-                respuestas_preguntas.append(
-                    RespuestaPreguntaCreate(
-                        pregunta_id=pregunta.id,
-                        texto=None,
-                        numero=numero,
-                        opcion_id=None
-                    )
-                )
-                print(f"Guardando respuesta NÚMERO: {numero}")
-            except ValueError:
-                # Si no es un número válido, guardar como texto
-                respuestas_preguntas.append(
-                    RespuestaPreguntaCreate(
-                        pregunta_id=pregunta.id,
-                        texto=respuesta_texto,
-                        numero=None,
-                        opcion_id=None
-                    )
-                )
-                print(f"Guardando respuesta como TEXTO (no es número válido): {respuesta_texto[:30]}...")
-        
+                respuestas_preguntas.append(respuesta_pregunta)
+                logger.debug(f"Guardando respuesta como TEXTO (no es número válido)")
+                
         elif pregunta.tipo_pregunta_id == 3:  # Select (opción única)
             # Buscar la opción seleccionada
-            opcion_seleccionada = None
-            print(f"Opciones disponibles para pregunta {pregunta.texto[:30]}:")
-            for opcion in pregunta.opciones:
-                print(f"  - {opcion.texto} (ID: {opcion.id})")
-                if respuesta_texto.strip() == opcion.texto:
-                    opcion_seleccionada = opcion
+            opcion_id = None
             
-            if opcion_seleccionada:
-                respuestas_preguntas.append(
-                    RespuestaPreguntaCreate(
-                        pregunta_id=pregunta.id,
-                        texto=None,
-                        numero=None,
-                        opcion_id=opcion_seleccionada.id
-                    )
+            # Primero buscar coincidencia exacta
+            for opcion in pregunta.opciones:
+                if respuesta_texto.strip().lower() == opcion.texto.lower():
+                    opcion_id = opcion.id
+                    logger.debug(f"Opción exacta encontrada: {opcion.texto}")
+                    break
+            
+            # Si no se encuentra coincidencia exacta, buscar coincidencia parcial
+            if not opcion_id:
+                for opcion in pregunta.opciones:
+                    if opcion.texto.lower() in respuesta_texto.lower() or respuesta_texto.lower() in opcion.texto.lower():
+                        opcion_id = opcion.id
+                        logger.debug(f"Opción parcial encontrada: {opcion.texto}")
+                        break
+            
+            # Crear la respuesta según si se encontró opción o no
+            if opcion_id:
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=None,
+                    numero=None,
+                    opcion_id=opcion_id
                 )
-                print(f"Guardando respuesta OPCIÓN ÚNICA: {opcion_seleccionada.texto} (ID: {opcion_seleccionada.id})")
+                respuestas_preguntas.append(respuesta_pregunta)
+                logger.debug(f"Guardando respuesta OPCIÓN")
             else:
                 # Si no se encuentra la opción, guardar como texto
-                respuestas_preguntas.append(
-                    RespuestaPreguntaCreate(
-                        pregunta_id=pregunta.id,
-                        texto=respuesta_texto,
-                        numero=None,
-                        opcion_id=None
-                    )
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=respuesta_texto,
+                    numero=None,
+                    opcion_id=None
                 )
-                print(f"No se encontró la opción. Guardando como TEXTO: {respuesta_texto[:30]}...")
-        
+                respuestas_preguntas.append(respuesta_pregunta)
+                logger.debug(f"Guardando como TEXTO (opción no encontrada)")
+                
         elif pregunta.tipo_pregunta_id == 4:  # Multiselect
-            # Dividir la respuesta por comas
-            opciones_texto = [opt.strip() for opt in respuesta_texto.split(',')]
-            print(f"Opciones seleccionadas (multiselect): {opciones_texto}")
+            # Para multiselect, dividir por comas y buscar opciones
+            selecciones = [s.strip().lower() for s in respuesta_texto.split(',')]
+            opciones_encontradas = []
             
-            # Buscar cada opción seleccionada
-            for opt_texto in opciones_texto:
+            # Buscar coincidencias para cada selección
+            for seleccion in selecciones:
                 for opcion in pregunta.opciones:
-                    if opt_texto == opcion.texto:
-                        respuestas_preguntas.append(
-                            RespuestaPreguntaCreate(
-                                pregunta_id=pregunta.id,
-                                texto=None,
-                                numero=None,
-                                opcion_id=opcion.id
-                            )
+                    if seleccion == opcion.texto.lower() or seleccion in opcion.texto.lower():
+                        respuesta_pregunta = RespuestaPreguntaCreate(
+                            pregunta_id=pregunta.id,
+                            texto=None,
+                            numero=None,
+                            opcion_id=opcion.id
                         )
-                        print(f"Guardando respuesta OPCIÓN MÚLTIPLE: {opcion.texto} (ID: {opcion.id})")
+                        respuestas_preguntas.append(respuesta_pregunta)
+                        opciones_encontradas.append(opcion.texto)
+                        logger.debug(f"Opción multiselect encontrada: {opcion.texto}")
                         break
+            
+            # Si no se encontró ninguna opción, guardar como texto
+            if not opciones_encontradas:
+                respuesta_pregunta = RespuestaPreguntaCreate(
+                    pregunta_id=pregunta.id,
+                    texto=respuesta_texto,
+                    numero=None,
+                    opcion_id=None
+                )
+                respuestas_preguntas.append(respuesta_pregunta)
+                logger.debug(f"Guardando como TEXTO (opciones no encontradas)")
     
-    # Crear el esquema de respuesta encuesta
+    if not respuestas_preguntas:
+        raise ValueError("No se pudieron extraer respuestas del historial de la conversación")
+    
+    # Crear el esquema de respuesta encuesta completa
     respuesta_schema = RespuestaEncuestaCreate(
         raw_payload={"historial": historial},
         respuestas_preguntas=respuestas_preguntas
     )
     
-    print(f"Creando respuesta con {len(respuestas_preguntas)} respuestas a preguntas")
+    logger.info(f"Creando respuesta final con {len(respuestas_preguntas)} respuestas")
     
-    # Crear la respuesta en la base de datos
-    respuesta = create_respuesta(db, entrega_id, respuesta_schema)
-    
-    # Marcar la entrega como respondida
-    mark_as_responded(db, entrega_id)
-    
-    print(f"Respuesta creada con ID: {respuesta.id}")
-    
-    return respuesta
+    try:
+        # Crear la respuesta en la base de datos
+        respuesta = create_respuesta(db, entrega_id, respuesta_schema)
+        
+        # Marcar la entrega como respondida
+        mark_as_responded(db, entrega_id)
+        
+        logger.info(f"Respuesta creada correctamente con ID: {respuesta.id}")
+        return respuesta
+    except Exception as e:
+        logger.error(f"Error creando respuesta: {str(e)}")
+        db.rollback()
+        raise ValueError(f"Error al crear respuesta: {str(e)}")
