@@ -42,7 +42,7 @@ async def enviar_mensaje_whatsapp(
         logger.info(f"Enviando mensaje a {numero_destino}: {mensaje_completo[:50]}...")
         
         # Preparar la petición según la documentación de Whapi
-        url = f"{settings.WHAPI_URL}/messages/text"
+        url = f"{settings.WHAPI_API_URL}/messages/text"
         headers = {
             "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
             "Content-Type": "application/json"
@@ -56,7 +56,7 @@ async def enviar_mensaje_whatsapp(
         
         # Si hay opciones, añadirlas como botones interactivos
         if opciones and len(opciones) > 0:
-            url = f"{settings.WHAPI_URL}/messages/interactive/buttons"
+            url = f"{settings.WHAPI_API_URL}/messages/interactive/buttons"
             payload = {
                 "to": numero_destino,
                 "body": mensaje,
