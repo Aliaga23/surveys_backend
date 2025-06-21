@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 from typing import List, Dict, Any, Tuple
 from uuid import UUID
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 # --------------------------------------------------------------------------- #
-# GPT util (solo cuando hay que desambiguar opciones 3/4)
+# GPT util (solo se usa para tipo 3 / 4 si no hay match exacto)
 # --------------------------------------------------------------------------- #
 
 SYSTEM_PROMPT = """
@@ -31,12 +32,13 @@ respuestas para las preguntas de la encuesta de manera natural y conversacional.
 async def generar_siguiente_pregunta(
     historial: List[Dict], texto: str, tipo: int
 ) -> str:
+    """(Se mantiene por si lo necesitas más adelante)."""
     msg = [{"role": "system", "content": SYSTEM_PROMPT}]
     msg += [m for m in historial if m.get("role") and m.get("content")]
     contexto = {
         1: "Pregunta abierta.",
         2: "Pregunta numérica.",
-        3: "Pregunta de opción única: dile que elija exactamente una de la lista.",
+        3: "Pregunta de opción única: pide elegir exactamente una de la lista.",
         4: "Pregunta multiselección: puede elegir varias separadas por coma."
     }
     msg.append({
@@ -49,31 +51,31 @@ async def generar_siguiente_pregunta(
     return rsp.choices[0].message.content.strip()
 
 # --------------------------------------------------------------------------- #
-#  Desambiguar opciones con GPT cuando no hay match exacto
+#  Desambiguar opciones con GPT (tipo 3 / 4)
 # --------------------------------------------------------------------------- #
 
 async def _match_opcion_ai(
     respuesta: str, opciones: List[str], multiple: bool
 ) -> Tuple[Any, str]:
-    # Coincidencia exacta primero
+    """Devuelve índice(s) o (None, error)."""
+    # Coincidencia exacta
     if not multiple:
         for i, op in enumerate(opciones):
             if respuesta.strip().lower() == op.lower():
                 return i, ""
     else:
-        exactos: List[int] = []
-        for trozo in [t.strip().lower() for t in respuesta.split(",")]:
-            for i, op in enumerate(opciones):
-                if trozo == op.lower():
-                    exactos.append(i)
+        exactos = [
+            i for trozo in [t.strip().lower() for t in respuesta.split(",")]
+            for i, op in enumerate(opciones) if trozo == op.lower()
+        ]
         if exactos:
             return exactos, ""
 
-    # GPT
+    # GPT como último recurso
     prompt = (
         f"Opciones: {', '.join(opciones)}\n"
         f"Respuesta: {respuesta}\n"
-        f"Devuelve índices {'separados por coma' if multiple else 'numérico'} "
+        f"Devuelve {'índices separados por coma' if multiple else 'un índice numérico'} "
         f"o 'ERROR' si no se entiende."
     )
     rsp = await client.chat.completions.create(
@@ -104,6 +106,7 @@ async def _match_opcion_ai(
 async def procesar_respuesta(
     db: Session, conversacion_id: UUID, respuesta: str
 ) -> Dict[str, Any]:
+    """Valida, guarda respuesta y devuelve la siguiente pregunta (o fin)."""
     conv = (
         db.query(ConversacionEncuesta)
         .options(joinedload(ConversacionEncuesta.entrega)
@@ -121,8 +124,7 @@ async def procesar_respuesta(
     # Historial
     conv.historial = conv.historial or []
     conv.historial.append({
-        "role": "user",
-        "content": respuesta,
+        "role": "user", "content": respuesta,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -137,38 +139,37 @@ async def procesar_respuesta(
         raise ValueError("Pregunta actual no encontrada")
 
     # Validar -> valor
-    valor: Any = None
-    if pregunta.tipo_pregunta_id == 1:          # texto
+    if pregunta.tipo_pregunta_id == 1:         # texto
         valor = respuesta
-
-    elif pregunta.tipo_pregunta_id == 2:        # número
+    elif pregunta.tipo_pregunta_id == 2:       # número
         try:
             valor = float(respuesta.strip())
         except ValueError:
             return {"error": "Por favor ingresa un número válido."}
-
-    elif pregunta.tipo_pregunta_id in (3, 4):   # opciones
-        opciones = [o.texto for o in pregunta.opciones]
+    else:                                      # opciones
+        opts = [o.texto for o in pregunta.opciones]
         idxs, err = await _match_opcion_ai(
-            respuesta, opciones, multiple=(pregunta.tipo_pregunta_id == 4)
+            respuesta, opts, multiple=(pregunta.tipo_pregunta_id == 4)
         )
         if err:
-            lista = "\n".join(f"• {t}" for t in opciones)
-            return {"error": f"{err}\nOpciones disponibles:\n{lista}"}
+            return {"error": f"{err}\nOpciones disponibles:\n" +
+                              "\n".join(f"• {t}" for t in opts)}
         valor = idxs
 
     # ------------------------------------------------------------------ #
     # GUARDAR EN BD
     # ------------------------------------------------------------------ #
-    # Cabecera
-    if not conv.respuesta_id:
+    # Cabecera por entrega
+    r_enc = (
+        db.query(RespuestaEncuesta)
+          .filter(RespuestaEncuesta.entrega_id == conv.entrega_id)
+          .first()
+    )
+    if not r_enc:
         r_enc = RespuestaEncuesta(entrega_id=conv.entrega_id)
         db.add(r_enc); db.commit(); db.refresh(r_enc)
-        conv.respuesta_id = r_enc.id; db.commit()
-    else:
-        r_enc = db.query(RespuestaEncuesta).get(conv.respuesta_id)
 
-    # Detalle
+    # Detalle según tipo
     if pregunta.tipo_pregunta_id == 1:
         detalle = RespuestaPregunta(
             respuesta_id=r_enc.id, pregunta_id=pregunta.id, texto=valor
@@ -191,7 +192,7 @@ async def procesar_respuesta(
     db.add(detalle); db.commit()
 
     # ------------------------------------------------------------------ #
-    # Buscar siguiente pregunta
+    # Elegir siguiente pregunta
     # ------------------------------------------------------------------ #
     todas = (
         db.query(PreguntaEncuesta)
@@ -203,9 +204,11 @@ async def procesar_respuesta(
     pos = {p.id: i for i, p in enumerate(todas)}[pregunta.id]
     siguiente = todas[pos + 1] if pos + 1 < len(todas) else None
 
-    if not siguiente:  # fin
+    if not siguiente:                   # fin de encuesta
         conv.completada = True; db.commit()
-        resumen = await crear_respuesta_encuesta(db, conv.entrega_id, conv.historial)
+        resumen = await crear_respuesta_encuesta(
+            db, conv.entrega_id, conv.historial
+        )
         return {"completada": True, "respuesta_id": str(resumen.id)}
 
     # Avanzar puntero
@@ -221,7 +224,7 @@ async def procesar_respuesta(
     return salida
 
 # --------------------------------------------------------------------------- #
-# Iniciar conversación por WhatsApp (usado por router / entregas)
+#  Iniciar conversación (utilizado por el router)
 # --------------------------------------------------------------------------- #
 
 async def iniciar_conversacion_whatsapp(
