@@ -305,7 +305,7 @@ def verify_registration(
         db.refresh(sus)
 
         # Generar access_token
-        access_token = create_access_token(subject=email)
+        access_token = create_access_token(subject=str(sus.id), role=rol_empresa.nombre)
 
         return {
             "message": "Cuenta activada correctamente",
