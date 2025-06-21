@@ -96,21 +96,20 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if estado_actual == 'esperando_confirmacion':
             respuesta_normalizada = texto.strip().lower()
             
-            # Manejar tanto respuestas de texto como de botones
             es_confirmacion = (
                 respuesta_normalizada in ['si', 'sí', 'yes', 'ok', 'okay'] or
                 'btn_si' in respuesta_normalizada
             )
             
             es_negacion = (
-                respuesta_normalizada in ['no', 'nop', 'después', 'luego'] or
+                respuesta_normalizada in ['no', 'nop', 'not'] or
                 'btn_no' in respuesta_normalizada
             )
             
             if es_confirmacion:
                 logger.info(f"Usuario {numero} confirmó iniciar la encuesta")
                 try:
-                    # Enviar primera pregunta
+                    # Enviar primera pregunta y actualizar estado
                     await enviar_primera_pregunta(db, entrega.id, chat_id)
                     conversaciones_estado[chat_id] = 'encuesta_en_progreso'
                     return {"success": True, "message": "First question sent"}
@@ -122,7 +121,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
                         "Lo siento, ocurrió un error. Escribe 'INICIAR' para intentar nuevamente."
                     )
                     return {"success": False, "error": str(e)}
-                
+
             # Usuario declina iniciar ahora
             elif es_negacion:
                 logger.info(f"Usuario {numero} declinó iniciar la encuesta")
@@ -405,37 +404,42 @@ async def enviar_siguiente_pregunta(chat_id: str, pregunta_info: Dict):
 
 async def enviar_primera_pregunta(db: Session, entrega_id: UUID, chat_id: str):
     """Envía la primera pregunta de la encuesta"""
-    # Obtener la primera pregunta de la plantilla
-    pregunta = (
-        db.query(PreguntaEncuesta)
-        .join(PlantillaEncuesta)
-        .join(CampanaEncuesta)
-        .join(EntregaEncuesta)
-        .filter(EntregaEncuesta.id == entrega_id)
-        .order_by(PreguntaEncuesta.orden)
-        .first()
-    )
-    
-    if not pregunta:
-        raise ValueError("No se encontraron preguntas en la plantilla")
-        
-    # Actualizar la conversación con la pregunta actual
-    conversacion = (
-        db.query(ConversacionEncuesta)
-        .filter(ConversacionEncuesta.entrega_id == entrega_id)
-        .first()
-    )
-    conversacion.pregunta_actual_id = pregunta.id
-    db.commit()
-    
-    # Enviar la primera pregunta según su tipo
-    if pregunta.tipo_pregunta_id in [3, 4]:
-        opciones = [op.texto for op in pregunta.opciones]
-        await enviar_mensaje_whatsapp(
-            chat_id,
-            pregunta.texto,
-            opciones=opciones,
-            tipo_mensaje="opciones"
+    try:
+        # Primero crear/obtener la conversación
+        conversacion = (
+            db.query(ConversacionEncuesta)
+            .filter(ConversacionEncuesta.entrega_id == entrega_id)
+            .first()
         )
-    else:
-        await enviar_mensaje_whatsapp(chat_id, pregunta.texto)
+
+        if not conversacion:
+            # Si no existe, crear nueva conversación
+            conversacion = await iniciar_conversacion_whatsapp(db, entrega_id)
+
+        # Obtener la pregunta actual
+        pregunta = (
+            db.query(PreguntaEncuesta)
+            .filter(PreguntaEncuesta.id == conversacion.pregunta_actual_id)
+            .first()
+        )
+
+        if not pregunta:
+            raise ValueError("No se pudo obtener la pregunta actual")
+
+        # Enviar la pregunta según su tipo
+        if pregunta.tipo_pregunta_id in [3, 4]:  # Selección única o múltiple
+            opciones = [op.texto for op in pregunta.opciones]
+            await enviar_mensaje_whatsapp(
+                chat_id,
+                pregunta.texto,
+                opciones=opciones,
+                tipo_mensaje="lista"  # Usar lista para mostrar opciones
+            )
+        else:
+            await enviar_mensaje_whatsapp(chat_id, pregunta.texto)
+
+        return conversacion
+
+    except Exception as e:
+        logger.error(f"Error enviando primera pregunta: {str(e)}")
+        raise

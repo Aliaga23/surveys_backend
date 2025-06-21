@@ -184,42 +184,31 @@ def get_entrega_by_destinatario(
     return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> ConversacionEncuesta:
-    """
-    Inicia una nueva conversación de encuesta enviando solo el mensaje de bienvenida
-    con botones de confirmación.
-    """
+    """Inicia una nueva conversación de encuesta"""
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
 
-    # Mensaje de bienvenida personalizado y conciso
-    nombre = entrega.destinatario.nombre or "Hola"
-    mensaje = (
-        f"¡{nombre}! 👋\n\n"
-        f"Te invitamos a participar en la encuesta: *{entrega.campana.nombre}*\n\n"
-        "¿Deseas comenzar ahora?"
+    # Obtener la primera pregunta
+    primera_pregunta = (
+        db.query(PreguntaEncuesta)
+        .join(PlantillaEncuesta)
+        .join(CampanaEncuesta)
+        .join(EntregaEncuesta)
+        .filter(EntregaEncuesta.id == entrega_id)
+        .order_by(PreguntaEncuesta.orden)
+        .first()
     )
 
-    # Enviar mensaje inicial con botones Sí/No
-    resultado = await enviar_mensaje_whatsapp(
-        entrega.destinatario.telefono,
-        mensaje,
-        tipo_mensaje="confirmacion"
-    )
+    if not primera_pregunta:
+        raise ValueError("No se encontraron preguntas en la plantilla")
 
-    if not resultado["success"]:
-        raise ValueError(f"Error enviando mensaje: {resultado.get('error')}")
-
-    # Crear nueva conversación
+    # Crear nueva conversación con la primera pregunta
     conversacion = ConversacionEncuesta(
         entrega_id=entrega_id,
         completada=False,
-        historial=[{
-            "role": "assistant",
-            "content": mensaje,
-            "timestamp": datetime.now().isoformat()
-        }],
-        pregunta_actual_id=None  # Se establecerá cuando confirme
+        historial=[],
+        pregunta_actual_id=primera_pregunta.id  # Asignar la primera pregunta
     )
     
     db.add(conversacion)
