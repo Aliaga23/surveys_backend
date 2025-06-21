@@ -22,7 +22,7 @@ from app.models.survey import (
     RespuestaEncuesta,
     RespuestaPregunta,
 )
-from app.services.entregas_service import mark_as_responded
+from app.services.entregas_service import mark_as_responded  # (sigue siendo usado por create_respuesta)
 from app.services.respuestas_service import crear_respuesta_encuesta
 from app.services.shared_service import get_entrega_con_plantilla
 
@@ -85,7 +85,7 @@ async def _match_opcion_ai(
       • None + msg     → pedir aclaración
     """
 
-    # ---------- HEURÍSTICA RÁPIDA (solo para selección única) ------------ #
+    # ---------- HEURÍSTICA RÁPIDA (solo selección única) ----------------- #
     if not multiple:
         plain = _norm(respuesta)
 
@@ -95,12 +95,10 @@ async def _match_opcion_ai(
                 return i, None
 
         # b) número 1-based
-        nums = re.findall(r"\b\d+\b", respuesta)
-        for n in nums:
+        for n in re.findall(r"\b\d+\b", respuesta):
             idx = int(n) - 1
             if 0 <= idx < len(opciones):
                 return idx, None
-        # si no coincide → pasa a GPT
 
     # ---------- GPT ------------------------------------------------------ #
     try:
@@ -116,7 +114,6 @@ async def _match_opcion_ai(
         idxs = data.get("indices", [])
         conf = float(data.get("confidence", 0))
 
-        # requerimos confianza ≥ 0.5
         if idxs and conf >= 0.5:
             if multiple:
                 idxs = [i for i in idxs if 0 <= i < len(opciones)]
@@ -247,7 +244,7 @@ async def procesar_respuesta(
             )
         )
 
-    else:  # multiselección → UNA FILA POR OPCIÓN (sin metadatos)
+    else:  # multiselección → una fila por cada opción
         for idx in valor:  # type: ignore[arg-type]
             db.add(
                 RespuestaPregunta(
@@ -279,8 +276,7 @@ async def procesar_respuesta(
         conv.completada = True
         db.commit()
 
-        mark_as_responded(db, conv.entrega_id)
-
+        # ¡NO marcar responded aquí!  Se hará dentro de create_respuesta
         resumen = await crear_respuesta_encuesta(
             db, conv.entrega_id, conv.historial
         )
