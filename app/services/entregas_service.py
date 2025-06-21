@@ -22,7 +22,6 @@ from app.services import whatsapp_service as ws
 from app.services.email_service import enviar_email  # Añadir esta importación
 from app.schemas.conversacion_schema import Mensaje
 from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
-from app.services.conversacion_service import generar_siguiente_pregunta
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.vapi_service import crear_llamada_encuesta
 from app.services.conversacion_service import iniciar_conversacion_whatsapp
