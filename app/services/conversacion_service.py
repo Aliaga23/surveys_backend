@@ -41,7 +41,6 @@ def _norm(txt: str) -> str:
 # --------------------------------------------------------------------------- #
 # DESAMBIGUAR OPCIONES
 # --------------------------------------------------------------------------- #
-
 # ---------- helper _match_opcion_ai (usa GPT SOLO en múltiple) ----------- #
 
 async def _match_opcion_ai(
@@ -50,37 +49,41 @@ async def _match_opcion_ai(
     multiple: bool,
 ) -> Tuple[Any, str]:
     """
-    • tipo 3  → intenta coincidencia exacta o número; GPT solo como fallback
-    • tipo 4  → delega SIEMPRE a GPT
-    Devuelve índice (int) o lista[int] según corresponda,
-    o (None, mensaje_error) si no reconoce la respuesta.
+    • Pregunta de opción única (tipo 3)  →
+        1) Intenta coincidencia exacta o número “1-based”.
+        2) Si no encuentra nada, pregunta a GPT (fallback).
+    • Pregunta multiselección (tipo 4)  →
+        Siempre delega a GPT; no hace ningún match local.
+    Devuelve:
+        – int          (para tipo 3)
+        – List[int]    (para tipo 4)
+        – (None, msg)  si no reconoce la respuesta.
     """
 
-    # ------------------------------- tipo 3 -------------------------------- #
+    # ---------- opción ÚNICA : intentamos match directo ------------------ #
     if not multiple:
         n_resp = _norm(respuesta)
 
-        # 1) coincidencia exacta de texto
+        # 1) texto exacto
         for i, op in enumerate(opciones):
             if n_resp == _norm(op):
                 return i, ""
 
-        # 2) algún número “1-based” en el mensaje
+        # 2) algún número “1-based” dentro del mensaje
         for n in [int(x) - 1 for x in re.findall(r"\b\d+\b", respuesta)]:
             if 0 <= n < len(opciones):
                 return n, ""
+        # …si falló, se cae a GPT como fallback
 
-        # …no hubo match → se cae a GPT como fallback
-
-    # ---------------------------- GPT (fallback o múltiple) --------------- #
+    # -------------------- GPT (multiselección o fallback) ---------------- #
     prompt = (
         "Lista de opciones con su índice (0-based):\n"
         + "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones))
         + "\n\nRespuesta del usuario:\n"
         + respuesta
-        + "\n\nDevuelve EXCLUSIVAMENTE los índices "
+        + "\n\nDevuelve *solo* los índices "
         + ("separados por coma" if multiple else "")
-        + ". Si no reconoces ninguna opción responde EXACTAMENTE 'ERROR'."
+        + ". Si no reconoces nada responde exactamente 'ERROR'."
     )
 
     try:
@@ -107,10 +110,13 @@ async def _match_opcion_ai(
                 "No reconozco ninguna de las opciones que escribiste. "
                 "Intenta nuevamente."
             )
-        else:
+        else:  # único, llegó aquí solo como fallback
             if idxs and 0 <= idxs[0] < len(opciones):
                 return idxs[0], ""
-            return None, "No reconozco la opción que escribiste. Intenta nuevamente."
+            return None, (
+                "No reconozco la opción que escribiste. "
+                "Intenta nuevamente."
+            )
 
     except Exception as exc:  # pragma: no cover
         logger.debug("GPT error: %s", exc)
