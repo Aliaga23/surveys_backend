@@ -262,6 +262,7 @@ def verify_registration(
     import jwt
     from jwt import ExpiredSignatureError, InvalidTokenError
     from uuid import uuid4
+    from app.core.security import create_access_token
 
     try:
         # Decodificar el token
@@ -303,7 +304,13 @@ def verify_registration(
         db.commit()
         db.refresh(sus)
 
-        return {"message": "Cuenta activada correctamente"}
+        # Generar access_token
+        access_token = create_access_token(subject=email)
+
+        return {
+            "message": "Cuenta activada correctamente",
+            "access_token": access_token
+        }
 
     except ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="El enlace ha expirado")
