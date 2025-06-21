@@ -42,6 +42,7 @@ def _norm(txt: str) -> str:
 # DESAMBIGUAR OPCIONES
 # --------------------------------------------------------------------------- #
 
+# ---------- helper _match_opcion_ai (usa GPT SOLO en múltiple) ----------- #
 
 async def _match_opcion_ai(
     respuesta: str,
@@ -49,39 +50,37 @@ async def _match_opcion_ai(
     multiple: bool,
 ) -> Tuple[Any, str]:
     """
-    Devuelve:
-      · índice int         (tipo 3)
-      · lista[int]         (tipo 4)
-      · (None, error_msg)  si no se identifica
-
-    – Para tipo 4 se delega SIEMPRE a GPT.  
-    – Para tipo 3 se prueba primero coincidencia exacta / numérica,
-      y se usa GPT solo si no hubo match.
+    • tipo 3  → intenta coincidencia exacta o número; GPT solo como fallback
+    • tipo 4  → delega SIEMPRE a GPT
+    Devuelve índice (int) o lista[int] según corresponda,
+    o (None, mensaje_error) si no reconoce la respuesta.
     """
 
-    # ---------- casos rápidos para selección ÚNICA ------------------------ #
+    # ------------------------------- tipo 3 -------------------------------- #
     if not multiple:
         n_resp = _norm(respuesta)
 
-        # coincidencia exacta de texto
+        # 1) coincidencia exacta de texto
         for i, op in enumerate(opciones):
             if n_resp == _norm(op):
                 return i, ""
 
-        # algún número “1-based” en el mensaje
+        # 2) algún número “1-based” en el mensaje
         for n in [int(x) - 1 for x in re.findall(r"\b\d+\b", respuesta)]:
             if 0 <= n < len(opciones):
                 return n, ""
 
-    # --------------------------- GPT -------------------------------------- #
+        # …no hubo match → se cae a GPT como fallback
+
+    # ---------------------------- GPT (fallback o múltiple) --------------- #
     prompt = (
         "Lista de opciones con su índice (0-based):\n"
         + "\n".join(f"[{i}] {o}" for i, o in enumerate(opciones))
         + "\n\nRespuesta del usuario:\n"
         + respuesta
-        + "\n\nDevuelve **solo** los índices "
+        + "\n\nDevuelve EXCLUSIVAMENTE los índices "
         + ("separados por coma" if multiple else "")
-        + ". Si no reconoces nada escribe exactamente 'ERROR'."
+        + ". Si no reconoces ninguna opción responde EXACTAMENTE 'ERROR'."
     )
 
     try:
@@ -119,6 +118,7 @@ async def _match_opcion_ai(
             "Ocurrió un problema interpretando tu respuesta. "
             "Intenta nuevamente."
         )
+
 
 
 # --------------------------------------------------------------------------- #
