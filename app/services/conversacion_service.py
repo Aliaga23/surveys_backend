@@ -48,15 +48,13 @@ def _norm(txt: str) -> str:
 
 def _build_prompt(respuesta: str, opciones: List[str], multiple: bool) -> List[Dict]:
     """
-    Crea los mensajes para ChatCompletion.
     GPT debe responder SOLO un JSON: {"indices":[...], "confidence":0-1}
-    Si no puede decidir con seguridad, indices = [] y confidence = 0.
     """
     lista = "\n".join(f"{i}. {op}" for i, op in enumerate(opciones, 1))
     system = (
         "Eres un parser JSON. Devuelve exclusivamente un JSON con las claves "
         '"indices" (lista de enteros base-0) y "confidence" (0-1). '
-        "Si no estás seguro, deja indices como [] y confidence = 0."
+        "Si no estás seguro, deja indices=[] y confidence=0."
     )
     user = (
         f"Opciones posibles:\n{lista}\n\n"
@@ -70,7 +68,8 @@ def _build_prompt(respuesta: str, opciones: List[str], multiple: bool) -> List[D
 
 
 # --------------------------------------------------------------------------- #
-# DESAMBIGUAR OPCIONES (IA PRIMERO)
+# DESAMBIGUAR OPCIONES
+# – heurística primero para tipo-3, GPT directo para tipo-4
 # --------------------------------------------------------------------------- #
 
 
@@ -81,14 +80,32 @@ async def _match_opcion_ai(
 ) -> Tuple[Any | None, str | None]:
     """
     Devuelve:
-      • índices válidos  → interpretación aceptada.
-      • None + msg       → pedir aclaración al usuario (no avanza).
-    Nunca lanza excepción que corte la conversación.
+      • int            → selección única válida
+      • list[int]      → multiselección válida
+      • None + msg     → pedir aclaración
     """
-    # ---------- 1.  GPT primero ------------------------------------------ #
+
+    # ---------- HEURÍSTICA RÁPIDA (solo para selección única) ------------ #
+    if not multiple:
+        plain = _norm(respuesta)
+
+        # a) texto exacto
+        for i, op in enumerate(opciones):
+            if plain == _norm(op):
+                return i, None
+
+        # b) número 1-based
+        nums = re.findall(r"\b\d+\b", respuesta)
+        for n in nums:
+            idx = int(n) - 1
+            if 0 <= idx < len(opciones):
+                return idx, None
+        # si no coincide → pasa a GPT
+
+    # ---------- GPT ------------------------------------------------------ #
     try:
         chat = await client.chat.completions.create(
-            model="gpt-4o-mini",  # usa el modelo que tengas habilitado
+            model="gpt-4o-mini",
             messages=_build_prompt(respuesta, opciones, multiple),
             temperature=0.0,
             timeout=8,
@@ -99,6 +116,7 @@ async def _match_opcion_ai(
         idxs = data.get("indices", [])
         conf = float(data.get("confidence", 0))
 
+        # requerimos confianza ≥ 0.5
         if idxs and conf >= 0.5:
             if multiple:
                 idxs = [i for i in idxs if 0 <= i < len(opciones)]
@@ -111,9 +129,9 @@ async def _match_opcion_ai(
                 )
 
     except Exception as exc:
-        logger.warning("GPT falló o respondió mal: %s", exc)
+        logger.warning("GPT falló o no respondió correctamente: %s", exc)
 
-    # ---------- 2.  IA no decidió → pedir aclaración --------------------- #
+    # ---------- pedir aclaración ----------------------------------------- #
     texto = (
         "No entendí tu elección 🤔.\n"
         "Por favor escribe nuevamente "
@@ -186,7 +204,6 @@ async def procesar_respuesta(
             multiple=(pregunta.tipo_pregunta_id == 4),
         )
         if valor is None:
-            # Pedir aclaración sin avanzar
             return {"retry": True, "mensaje": msg}
 
     # --------------------------------------------------------------------- #
@@ -204,32 +221,42 @@ async def procesar_respuesta(
         db.refresh(r_enc)
 
     if pregunta.tipo_pregunta_id == 1:
-        det = RespuestaPregunta(
-            respuesta_id=r_enc.id,
-            pregunta_id=pregunta.id,
-            texto=valor,  # type: ignore[arg-type]
-        )
-    elif pregunta.tipo_pregunta_id == 2:
-        det = RespuestaPregunta(
-            respuesta_id=r_enc.id,
-            pregunta_id=pregunta.id,
-            numero=valor,  # type: ignore[arg-type]
-        )
-    elif pregunta.tipo_pregunta_id == 3:
-        det = RespuestaPregunta(
-            respuesta_id=r_enc.id,
-            pregunta_id=pregunta.id,
-            opcion_id=pregunta.opciones[valor].id,  # type: ignore[arg-type]
-        )
-    else:  # multiselección
-        uuids = [str(pregunta.opciones[i].id) for i in valor]  # type: ignore[arg-type]
-        det = RespuestaPregunta(
-            respuesta_id=r_enc.id,
-            pregunta_id=pregunta.id,
-            metadatos={"opciones": uuids},
+        db.add(
+            RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=pregunta.id,
+                texto=valor,  # type: ignore[arg-type]
+            )
         )
 
-    db.add(det)
+    elif pregunta.tipo_pregunta_id == 2:
+        db.add(
+            RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=pregunta.id,
+                numero=valor,  # type: ignore[arg-type]
+            )
+        )
+
+    elif pregunta.tipo_pregunta_id == 3:
+        db.add(
+            RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=pregunta.id,
+                opcion_id=pregunta.opciones[valor].id,  # type: ignore[arg-type]
+            )
+        )
+
+    else:  # multiselección → UNA FILA POR OPCIÓN (sin metadatos)
+        for idx in valor:  # type: ignore[arg-type]
+            db.add(
+                RespuestaPregunta(
+                    respuesta_id=r_enc.id,
+                    pregunta_id=pregunta.id,
+                    opcion_id=pregunta.opciones[idx].id,
+                )
+            )
+
     db.commit()
 
     # --------------------------------------------------------------------- #
