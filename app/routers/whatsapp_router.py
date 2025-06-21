@@ -28,7 +28,7 @@ from app.services.conversacion_service import procesar_respuesta
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/whatsapp", tags=["WhatsApp"])
 
-# Estado en memoria – usa Redis en producción
+# estado en memoria –‐ usa Redis en prod
 conversaciones_estado: Dict[str, str] = {}
 
 
@@ -36,33 +36,55 @@ conversaciones_estado: Dict[str, str] = {}
 # HELPERS
 # --------------------------------------------------------------------------- #
 
+def _render_multiselect_text(pregunta: PreguntaEncuesta) -> str:
+    """Devuelve texto plano con las opciones para multiselección."""
+    opciones = "\n".join(f"• {op.texto}" for op in pregunta.opciones)
+    return (
+        f"{pregunta.texto}\n\n"
+        f"Opciones disponibles:\n{opciones}\n\n"
+        "Responde escribiendo las opciones que elijas (en cualquier orden)."
+    )
+
+
 async def _send_first_question(db: Session, entrega_id: UUID, chat_id: str) -> None:
     """Crea la conversación y envía la primera pregunta."""
     conv = await iniciar_conversacion_whatsapp(db, entrega_id)
-    pregunta = (
-        db.query(PreguntaEncuesta)
-        .filter(PreguntaEncuesta.id == conv.pregunta_actual_id)
-        .first()
-    )
+    pregunta = db.query(PreguntaEncuesta).get(conv.pregunta_actual_id)
     if not pregunta:
         raise ValueError("No se pudo obtener la pregunta inicial")
 
-    if pregunta.tipo_pregunta_id in (3, 4):      # lista / multiselección
+    if pregunta.tipo_pregunta_id == 3:  # selección ÚNICA
         opciones = [op.texto for op in pregunta.opciones]
         await ws.send_list(chat_id, pregunta.texto, opciones)
-    else:
+
+    elif pregunta.tipo_pregunta_id == 4:  # multiselección → texto plano
+        await ws.send_text(chat_id, _render_multiselect_text(pregunta))
+
+    else:  # texto o numérico
         await ws.send_text(chat_id, pregunta.texto)
 
 
 async def _send_next(db: Session, resultado: Dict, chat_id: str) -> None:
     """Envía la siguiente pregunta según su tipo."""
-    if resultado.get("opciones") and resultado.get("tipo_pregunta") in (3, 4):
+    tp = resultado.get("tipo_pregunta")
+
+    if tp == 3 and resultado.get("opciones"):  # selección única
         await ws.send_list(
             chat_id,
             resultado["siguiente_pregunta"],
             resultado["opciones"],
         )
-    else:
+
+    elif tp == 4 and resultado.get("opciones"):  # multiselección
+        opciones = "\n".join(f"• {o}" for o in resultado["opciones"])
+        texto = (
+            f"{resultado['siguiente_pregunta']}\n\n"
+            f"Opciones disponibles:\n{opciones}\n\n"
+            "Responde escribiendo las opciones que elijas (en cualquier orden)."
+        )
+        await ws.send_text(chat_id, texto)
+
+    else:  # resto
         await ws.send_text(chat_id, resultado["siguiente_pregunta"])
 
 
@@ -76,41 +98,38 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     payload = json.loads(body.decode("utf-8"))
     data = parse_webhook(payload)
 
-    # 0) Verificación Whapi (GET emulado como POST)
+    # 0) verificación whapi (GET emulado como POST)
     if payload.get("hubVerificationToken"):
         if payload["hubVerificationToken"] == settings.WHAPI_TOKEN:
             return {"success": True, "message": "Webhook verified"}
         raise HTTPException(status_code=403, detail="Invalid verification token")
 
-    # 1) Estados de entrega / lectura
+    # 1) estados de entrega / lectura
     if data["kind"] == "status":
         return {"success": True, "message": "Status ignored"}
 
-    # 2) Mensajes propios, no-texto o desconocidos
+    # 2) mensajes propios, no-texto o desconocidos
     if data["kind"] in ("own", "non_text", "unknown"):
         return {"success": True, "message": f"Ignored {data['kind']}"}
 
-    # 3) Error del parser
+    # 3) error del parser
     if data["kind"] == "error":
         logger.error("Parser error: %s", data["error"])
         return {"success": False, "error": data["error"]}
 
-    # 4) Mensaje válido
-    numero  = data["from_number"]
-    texto   = data["text"].strip()
-    payload_id = data.get("payload_id", "")
-    chat_id = f"{numero}@c.us"
+    # 4) mensaje válido
+    numero      = data["from_number"]
+    texto       = data["text"].strip()
+    payload_id  = data.get("payload_id", "")
+    chat_id     = f"{numero}@c.us"
 
     estado = conversaciones_estado.get(chat_id, "esperando_confirmacion")
     logger.info("Mensaje de %s, estado %s: %s", numero, estado, texto)
 
-    # ---------- localizar entrega ----------
+    # localizar entrega
     entrega = get_entrega_by_destinatario(db, telefono=numero)
     if not entrega:
-        await ws.send_text(
-            chat_id,
-            "Hola 👋 No encontré una encuesta pendiente para este número."
-        )
+        await ws.send_text(chat_id, "Hola 👋 No encontré una encuesta pendiente para este número.")
         return {"success": True, "message": "No entrega"}
 
     # ------------------------------------------------------------------ #
@@ -127,13 +146,9 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return {"success": True, "message": "Survey started"}
 
         if es_no:
-            await ws.send_text(
-                chat_id,
-                "Entendido. Cuando desees empezar, escribe INICIAR."
-            )
+            await ws.send_text(chat_id, "Entendido. Cuando desees empezar, escribe INICIAR.")
             return {"success": True, "message": "Survey declined"}
 
-        # aclaración
         await ws.send_confirm(
             chat_id,
             "Responde 'Sí' para comenzar la encuesta ahora o 'No' para más tarde."
@@ -145,11 +160,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     # ------------------------------------------------------------------ #
     if estado == "encuesta_en_progreso":
         try:
-            # entrega.conversacion es lista – usamos la primera o creamos
-            conv = entrega.conversacion[0] if entrega.conversacion else None
-            if not conv:
-                conv = await iniciar_conversacion_whatsapp(db, entrega.id)
-
+            conv = entrega.conversacion[0] if entrega.conversacion else await iniciar_conversacion_whatsapp(db, entrega.id)
             resultado = await procesar_respuesta(db, conv.id, texto)
 
             if "error" in resultado:
@@ -169,10 +180,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
         except Exception:
             logger.error("ERROR procesando respuesta", exc_info=True)
-            await ws.send_text(
-                chat_id,
-                "Ocurrió un error. Escribe INICIAR para reiniciar."
-            )
+            await ws.send_text(chat_id, "Ocurrió un error. Escribe INICIAR para reiniciar.")
             return {"success": False, "error": "exception"}
 
     # ------------------------------------------------------------------ #
@@ -183,18 +191,14 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         nombre = entrega.destinatario.nombre or "Hola"
         await ws.send_confirm(
             chat_id,
-            f"{nombre}, ¿deseas comenzar la encuesta "
-            f"'{entrega.campana.nombre}' ahora?"
+            f"{nombre}, ¿deseas comenzar la encuesta '{entrega.campana.nombre}' ahora?"
         )
         return {"success": True, "message": "Confirmation requested"}
 
     # ------------------------------------------------------------------ #
-    # Default → pedir INICIAR
+    # default → pedir INICIAR
     # ------------------------------------------------------------------ #
-    await ws.send_text(
-        chat_id,
-        "Para iniciar o continuar la encuesta escribe INICIAR."
-    )
+    await ws.send_text(chat_id, "Para iniciar o continuar la encuesta escribe INICIAR.")
     conversaciones_estado[chat_id] = "esperando_confirmacion"
     return {"success": True, "message": "State reset"}
 
@@ -235,9 +239,7 @@ async def get_status():
 
 
 @router.post("/send")
-async def manual_send(
-    numero: str, mensaje: str, opciones: List[str] | None = None
-):
+async def manual_send(numero: str, mensaje: str, opciones: List[str] | None = None):
     if opciones:
         return await ws.send_list(numero, mensaje, opciones)
     return await ws.send_text(numero, mensaje)
