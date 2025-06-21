@@ -184,94 +184,45 @@ def get_entrega_by_destinatario(
     return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
 
 async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID):
-    """Inicia el flujo de preguntas de la encuesta después de la confirmación"""
+    """Inicia el flujo de la encuesta mostrando resumen y solicitando confirmación"""
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin número de teléfono")
 
-    # Verificar si ya existe una conversación para esta entrega
-    conversacion_existente = (
-        db.query(ConversacionEncuesta)
-        .filter(ConversacionEncuesta.entrega_id == entrega_id)
-        .first()
-    )
-    
-    if conversacion_existente:
-        # Si ya existe una conversación, obtener la pregunta actual
-        pregunta_actual = (
-            db.query(PreguntaEncuesta)
-            .filter(PreguntaEncuesta.id == conversacion_existente.pregunta_actual_id)
-            .first()
-        )
-        
-        # Generar nuevamente la pregunta
-        texto_pregunta = await generar_siguiente_pregunta(
-            conversacion_existente.historial,
-            pregunta_actual.texto,
-            pregunta_actual.tipo_pregunta_id
-        )
-        
-        # Determinar opciones
-        opciones = None
-        if pregunta_actual.tipo_pregunta_id in [3, 4]:
-            opciones = [opcion.texto for opcion in pregunta_actual.opciones]
-        
-        # Enviar la pregunta actual
-        await enviar_mensaje_whatsapp(
-            entrega.destinatario.telefono,
-            texto_pregunta,
-            opciones
-        )
-        
-        return conversacion_existente
-    
-    # Si no existe conversación, crear una nueva
-    primera_pregunta = (
+    # Generar resumen de la encuesta
+    preguntas = (
         db.query(PreguntaEncuesta)
         .filter(PreguntaEncuesta.plantilla_id == entrega.campana.plantilla_id)
         .order_by(PreguntaEncuesta.orden)
-        .first()
+        .options(joinedload(PreguntaEncuesta.opciones))
+        .all()
     )
     
-    if not primera_pregunta:
-        raise ValueError("La plantilla no tiene preguntas")
+    # Crear mensaje de resumen
+    resumen = f"*{entrega.campana.nombre}*\n\n"
+    resumen += "La encuesta contiene las siguientes preguntas:\n\n"
+    
+    for i, pregunta in enumerate(preguntas, 1):
+        resumen += f"{i}. {pregunta.texto}\n"
+        if pregunta.opciones:
+            for j, opcion in enumerate(pregunta.opciones, 1):
+                resumen += f"   {j}) {opcion.texto}\n"
+        resumen += "\n"
+    
+    resumen += "\n¿Deseas comenzar la encuesta ahora?"
 
-    # Generar texto de la primera pregunta de forma amigable
-    texto_inicial = await generar_siguiente_pregunta(
-        [],  # Historial vacío al inicio
-        primera_pregunta.texto,
-        primera_pregunta.tipo_pregunta_id
+    # Enviar mensaje con botones de confirmación
+    resultado = await enviar_mensaje_whatsapp(
+        entrega.destinatario.telefono,
+        resumen,
+        tipo_mensaje="confirmacion"
     )
 
-    # Crear conversación y guardar en DB
-    conversacion = ConversacionEncuesta(
-        entrega_id=entrega_id,
-        pregunta_actual_id=primera_pregunta.id,
-        historial=[{
-            "role": "assistant",
-            "content": texto_inicial,
-            "timestamp": datetime.now().isoformat()
-        }]
-    )
-    
-    db.add(conversacion)
-    db.commit()
-    db.refresh(conversacion)
-    
-    # Determinar si hay opciones para presentar
-    opciones = None
-    if primera_pregunta.tipo_pregunta_id in [3, 4]:
-        opciones = [opcion.texto for opcion in primera_pregunta.opciones]
-    
-    # Enviar primera pregunta
-    await enviar_mensaje_whatsapp(
-        entrega.destinatario.telefono, 
-        texto_inicial,
-        opciones
-    )
-    
-    logger.info(f"Primera pregunta enviada a {entrega.destinatario.telefono}")
-    return conversacion
+    if not resultado["success"]:
+        raise ValueError(f"Error enviando mensaje: {resultado.get('error')}")
+
+    logger.info(f"Mensaje de inicio enviado a {entrega.destinatario.telefono}")
+    return True
 
 async def create_entrega(
     db: Session, 

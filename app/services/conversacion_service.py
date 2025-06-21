@@ -4,6 +4,7 @@ from uuid import UUID
 from datetime import datetime
 from openai import AsyncOpenAI
 import re
+import json
 
 from app.models.survey import (
     CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta, 
@@ -167,24 +168,53 @@ async def analizar_respuesta_con_ai(
         return None, f"Error analizando la respuesta: {str(e)}. Por favor, intenta nuevamente."
 
 
+async def analizar_respuesta_con_gpt(
+    respuesta_usuario: str,
+    opciones: List[str],
+    pregunta: str
+) -> Tuple[int, float]:
+    """
+    Analiza la respuesta del usuario usando GPT para encontrar la mejor coincidencia.
+    
+    Returns:
+        Tuple[int, float]: (índice de la opción más cercana, nivel de confianza)
+    """
+    prompt = f"""
+    Pregunta: "{pregunta}"
+    Respuesta del usuario: "{respuesta_usuario}"
+    Opciones disponibles:
+    {json.dumps(opciones, indent=2)}
+    
+    Analiza la respuesta y determina cuál de las opciones disponibles es la más cercana.
+    Responde solo con un JSON que contenga:
+    - index: índice de la opción más cercana (0 basado)
+    - confidence: nivel de confianza entre 0 y 1
+    - reasoning: breve explicación de por qué se eligió esa opción
+    """
+    
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente que analiza respuestas de encuestas."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result["index"], result["confidence"]
+        
+    except Exception as e:
+        return None, 0.0
+
+
 async def procesar_respuesta(
     db: Session,
     conversacion_id: UUID,
     respuesta_usuario: str
 ) -> Dict:
-    """
-    Procesa la respuesta del usuario y determina la siguiente acción
-    
-    Args:
-        db: Sesión de base de datos
-        conversacion_id: ID de la conversación
-        respuesta_usuario: Texto de la respuesta del usuario
-    
-    Returns:
-        Dict con información sobre la respuesta procesada y siguiente acción
-    """
-    print(f"Procesando respuesta para conversación {conversacion_id}: {respuesta_usuario[:30]}...")
-    
+    """Procesa la respuesta del usuario y determina la siguiente acción"""
     conversacion = (
         db.query(ConversacionEncuesta)
         .join(EntregaEncuesta)
@@ -200,7 +230,6 @@ async def procesar_respuesta(
     
     # Si la conversación ya está completada, no procesar más respuestas
     if conversacion.completada:
-        print(f"La conversación {conversacion_id} ya está completada")
         return {
             "completada": True,
             "mensaje": "Esta encuesta ya ha sido completada. Gracias por tu participación."
@@ -223,8 +252,6 @@ async def procesar_respuesta(
     if not pregunta_actual:
         raise ValueError("Pregunta actual no encontrada")
     
-    print(f"Procesando respuesta para pregunta: {pregunta_actual.texto[:50]}...")
-
     preguntas_plantilla = (
         db.query(PreguntaEncuesta)
         .filter(PreguntaEncuesta.plantilla_id == pregunta_actual.plantilla_id)
@@ -233,29 +260,23 @@ async def procesar_respuesta(
         .all()
     )
     
-    print(f"Total preguntas en plantilla: {len(preguntas_plantilla)}")
-
     # Procesamiento de la respuesta según el tipo de pregunta
     valor_procesado = None
     
     if pregunta_actual.tipo_pregunta_id == 1:  # Texto
         # Para preguntas de texto, guardamos el texto directamente
         valor_procesado = respuesta_usuario
-        print(f"Respuesta procesada como TEXTO")
         
     elif pregunta_actual.tipo_pregunta_id == 2:  # Número
         # Para preguntas numéricas, intentamos convertir a número
         try:
             valor_procesado = float(respuesta_usuario.strip())
-            print(f"Respuesta procesada como NÚMERO: {valor_procesado}")
         except ValueError:
-            print(f"Error: La respuesta no es un número válido")
             return {"error": "Por favor, ingresa un número válido."}
             
     elif pregunta_actual.tipo_pregunta_id == 3:  # Select (opción única)
         # Verificar si la respuesta es una opción válida
         opciones = [opcion.texto for opcion in pregunta_actual.opciones]
-        print(f"Opciones disponibles: {opciones}")
         
         # Primero buscar coincidencia exacta
         opcion_seleccionada = None
@@ -268,7 +289,6 @@ async def procesar_respuesta(
         if opcion_seleccionada:
             # Coincidencia exacta encontrada
             valor_procesado = opcion_seleccionada.id
-            print(f"Coincidencia exacta encontrada: {opcion_seleccionada.texto}")
         else:
             # Intentar analizar con AI si no hay coincidencia exacta
             indice_opcion, mensaje_error = await analizar_respuesta_con_ai(
@@ -278,17 +298,14 @@ async def procesar_respuesta(
             if indice_opcion is not None:
                 opcion_seleccionada = pregunta_actual.opciones[indice_opcion]
                 valor_procesado = opcion_seleccionada.id
-                print(f"AI identificó la opción: {opcion_seleccionada.texto}")
             else:
                 # No se pudo identificar la opción
                 opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
-                print(f"Error: {mensaje_error}")
                 return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
             
     elif pregunta_actual.tipo_pregunta_id == 4:  # Multiselect
         # Para multiselect, el usuario puede seleccionar varias opciones
         opciones = [opcion.texto for opcion in pregunta_actual.opciones]
-        print(f"Opciones disponibles (multiselect): {opciones}")
         
         # Intentar coincidencias exactas primero
         respuestas = [r.strip().lower() for r in respuesta_usuario.split(',')]
@@ -310,7 +327,6 @@ async def procesar_respuesta(
         if todas_coincidencias_exactas and opciones_seleccionadas:
             # Todas las respuestas coinciden exactamente con opciones
             valor_procesado = opciones_seleccionadas
-            print(f"Opciones seleccionadas: {valor_procesado}")
         else:
             # Intentar analizar con AI
             indices_opciones, mensaje_error = await analizar_respuesta_con_ai(
@@ -323,11 +339,9 @@ async def procesar_respuesta(
                     pregunta_actual.opciones[i].id for i in indices_opciones
                 ]
                 valor_procesado = opciones_seleccionadas
-                print(f"AI identificó las opciones: {valor_procesado}")
             else:
                 # No se pudieron identificar las opciones
                 opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
-                print(f"Error: {mensaje_error}")
                 return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
 
     # Encontrar la siguiente pregunta en orden
@@ -335,7 +349,6 @@ async def procesar_respuesta(
     for i, pregunta in enumerate(preguntas_plantilla):
         if pregunta.id == pregunta_actual.id and i + 1 < len(preguntas_plantilla):
             siguiente_pregunta = preguntas_plantilla[i + 1]
-            print(f"Siguiente pregunta: {siguiente_pregunta.texto[:50]}")
             break
 
     if siguiente_pregunta:
@@ -355,7 +368,6 @@ async def procesar_respuesta(
         opciones = None
         if siguiente_pregunta.tipo_pregunta_id in [3, 4]:
             opciones = [opcion.texto for opcion in siguiente_pregunta.opciones]
-            print(f"Opciones para siguiente pregunta: {opciones}")
         
         # Guardar cambios en la base de datos
         db.commit()
@@ -369,16 +381,13 @@ async def procesar_respuesta(
         }
     else:
         # La encuesta ha sido completada
-        print("ENCUESTA COMPLETADA")
         conversacion.completada = True
         db.commit()
         
         # Crear la respuesta final con todas las respuestas acumuladas
         try:
-            print("Creando respuesta final en la base de datos")
             respuesta = await crear_respuesta_encuesta(db, conversacion.entrega_id, conversacion.historial)
             
-            print(f"Respuesta creada con ID: {respuesta.id}")
             return {
                 "valor_procesado": valor_procesado,
                 "siguiente_pregunta": "¡Gracias por completar la encuesta!",
@@ -386,7 +395,6 @@ async def procesar_respuesta(
                 "respuesta_id": str(respuesta.id)
             }
         except Exception as e:
-            print(f"ERROR creando respuesta final: {str(e)}")
             return {
                 "valor_procesado": valor_procesado,
                 "siguiente_pregunta": "¡Gracias por completar la encuesta!",

@@ -96,30 +96,33 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         if estado_actual == 'esperando_confirmacion':
             respuesta_normalizada = texto.strip().lower()
             
-            # Verificar si el usuario confirma iniciar la encuesta
-            if re.match(r'(s[iíì]|yes|ok|okay|vale|claro|por supuesto|adelante|iniciar)', respuesta_normalizada):
+            # Manejar tanto respuestas de texto como de botones
+            es_confirmacion = (
+                respuesta_normalizada in ['si', 'sí', 'yes', 'ok', 'okay'] or
+                'btn_si' in respuesta_normalizada
+            )
+            
+            es_negacion = (
+                respuesta_normalizada in ['no', 'nop', 'después', 'luego'] or
+                'btn_no' in respuesta_normalizada
+            )
+            
+            if es_confirmacion:
                 logger.info(f"Usuario {numero} confirmó iniciar la encuesta")
-                
                 try:
-                    # Iniciar la conversación - este método envía la primera pregunta
                     await iniciar_conversacion_whatsapp(db, entrega.id)
-                    
-                    # Actualizar el estado
                     conversaciones_estado[chat_id] = 'encuesta_en_progreso'
-                    logger.info(f"Estado actualizado para {numero}: encuesta_en_progreso")
-                    
                     return {"success": True, "message": "Survey started"}
-                    
                 except Exception as e:
-                    logger.error(f"Error iniciando conversación: {str(e)}")
+                    logger.error(f"Error iniciando encuesta: {str(e)}")
                     await enviar_mensaje_whatsapp(
-                        chat_id,
-                        "Lo siento, ocurrió un error al iniciar la encuesta. Por favor, escribe 'INICIAR' para intentar nuevamente."
+                        chat_id, 
+                        "Lo siento, ocurrió un error. Escribe 'INICIAR' para intentar nuevamente."
                     )
                     return {"success": False, "error": str(e)}
-                    
+                
             # Usuario declina iniciar ahora
-            elif re.match(r'(no|nop|después|luego|más tarde|en otro momento)', respuesta_normalizada):
+            elif es_negacion:
                 logger.info(f"Usuario {numero} declinó iniciar la encuesta")
                 
                 await enviar_mensaje_whatsapp(
@@ -303,7 +306,7 @@ async def verify_webhook(request: Request):
     logger.info(f"Verificación de webhook - Mode: {mode}, Challenge: {challenge}")
     
     # Verificar token
-    verify_token = settings.WHAPI_VERIFY_TOKEN
+    verify_token = settings.WHAPI_TOKEN
     
     if mode == 'subscribe' and token == verify_token:
         logger.info("Webhook verificado correctamente")
@@ -368,3 +371,32 @@ async def send_whatsapp_message(
     """
     resultado = await enviar_mensaje_whatsapp(numero, mensaje, opciones)
     return resultado
+
+async def enviar_siguiente_pregunta(chat_id: str, pregunta_info: Dict):
+    """Envía la siguiente pregunta según su tipo"""
+    if pregunta_info.get("tipo_pregunta") == 3:  # Selección única
+        await enviar_mensaje_whatsapp(
+            chat_id,
+            pregunta_info["siguiente_pregunta"],
+            opciones=pregunta_info["opciones"],
+            tipo_mensaje="lista"
+        )
+    elif pregunta_info.get("tipo_pregunta") == 4:  # Selección múltiple
+        mensaje = (
+            f"{pregunta_info['siguiente_pregunta']}\n\n"
+            "Puedes seleccionar varias opciones separándolas por comas."
+        )
+        await enviar_mensaje_whatsapp(
+            chat_id,
+            mensaje,
+            opciones=pregunta_info["opciones"],
+            tipo_mensaje="lista"
+        )
+    elif pregunta_info.get("tipo_pregunta") == 2:  # Número
+        mensaje = (
+            f"{pregunta_info['siguiente_pregunta']}\n\n"
+            "Por favor, responde con un número."
+        )
+        await enviar_mensaje_whatsapp(chat_id, mensaje)
+    else:  # Texto libre
+        await enviar_mensaje_whatsapp(chat_id, pregunta_info["siguiente_pregunta"])

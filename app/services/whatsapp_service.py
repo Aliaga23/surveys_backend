@@ -11,43 +11,26 @@ async def enviar_mensaje_whatsapp(
     numero_destino: str, 
     mensaje: str, 
     opciones: Optional[List[str]] = None,
-    tipo_mensaje: str = "normal"  # Puede ser "normal", "confirmacion", "opciones"
+    tipo_mensaje: str = "normal"  # "normal", "confirmacion", "opciones", "lista"
 ) -> Dict:
-    """
-    Envía un mensaje por WhatsApp usando la API de Whapi.
-    
-    Args:
-        numero_destino: Número de teléfono del destinatario
-        mensaje: Texto del mensaje
-        opciones: Lista de opciones para mostrar (opcional)
-        tipo_mensaje: Tipo de mensaje a enviar ("normal", "confirmacion", "opciones")
-    
-    Returns:
-        Dict con información sobre el resultado del envío
-    """
+    """Envía un mensaje por WhatsApp usando la API de Whapi."""
     try:
-        # Normalizar número de teléfono (eliminar @c.us si existe)
+        # Normalizar número
         if '@' in numero_destino:
             numero_destino = numero_destino.split('@')[0]
-        
-        # Eliminar espacios y caracteres especiales
         numero_destino = re.sub(r'[^0-9]', '', numero_destino)
         
-        logger.info(f"Enviando mensaje a {numero_destino}: {mensaje[:50]}...")
+        logger.info(f"Enviando mensaje a {numero_destino}")
         
-        # Preparar headers comunes
         headers = {
             "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
             "Content-Type": "application/json"
         }
         
-        # Determinar URL base
-        api_url = settings.WHAPI_API_URL or "https://gate.whapi.cloud"
+        url = f"{settings.WHAPI_API_URL}/messages/interactive"
         
-        # Construir el payload según el tipo de mensaje
         if tipo_mensaje == "confirmacion":
-            # Mensaje de confirmación Sí/No para iniciar encuesta
-            url = f"{api_url}/messages/interactive"
+            # Mensaje con botones Sí/No
             payload = {
                 "to": numero_destino,
                 "type": "button",
@@ -58,7 +41,7 @@ async def enviar_mensaje_whatsapp(
                     "text": mensaje
                 },
                 "footer": {
-                    "text": "Por favor responde para continuar"
+                    "text": "Por favor confirma para continuar"
                 },
                 "action": {
                     "buttons": [
@@ -68,33 +51,20 @@ async def enviar_mensaje_whatsapp(
                             "id": "btn_si"
                         },
                         {
-                            "type": "quick_reply",
+                            "type": "quick_reply", 
                             "title": "No",
                             "id": "btn_no"
                         }
                     ]
                 }
             }
-        elif tipo_mensaje == "opciones" and opciones and len(opciones) > 0:
-            # Mensaje con opciones múltiples para preguntas tipo 3
-            url = f"{api_url}/messages/interactive"
-            
-            # Preparar botones para todas las opciones
-            botones = []
-            for i, opcion in enumerate(opciones):
-                # Limitar la longitud del título a 20 caracteres (límite de WhatsApp)
-                titulo = opcion[:20] if len(opcion) > 20 else opcion
-                botones.append({
-                    "type": "quick_reply",
-                    "title": titulo,
-                    "id": f"btn_{i}"
-                })
-                
+        elif tipo_mensaje == "lista" and opciones:
+            # Mensaje con lista de opciones
             payload = {
                 "to": numero_destino,
-                "type": "button",
+                "type": "list",
                 "header": {
-                    "text": "Selección"
+                    "text": "Opciones"
                 },
                 "body": {
                     "text": mensaje
@@ -103,82 +73,43 @@ async def enviar_mensaje_whatsapp(
                     "text": "Selecciona una opción"
                 },
                 "action": {
-                    "buttons": botones[:3]  # Máximo 3 botones permitidos
-                }
-            }
-            
-            # Si hay más de 3 opciones, necesitamos manejarlas diferentemente
-            if len(opciones) > 3:
-                # Cambiamos a tipo lista que permite más opciones
-                payload = {
-                    "to": numero_destino,
-                    "type": "list",
-                    "header": {
-                        "text": "Selección"
-                    },
-                    "body": {
-                        "text": mensaje
-                    },
-                    "footer": {
-                        "text": "Haz clic para ver las opciones"
-                    },
-                    "action": {
-                        "list": {
-                            "sections": [
-                                {
-                                    "title": "Opciones disponibles",
-                                    "rows": [
-                                        {
-                                            "id": f"opt_{i}",
-                                            "title": opcion[:24]  # Limitar longitud
-                                        } for i, opcion in enumerate(opciones)
-                                    ]
-                                }
-                            ],
-                            "label": "Ver opciones"
-                        }
+                    "list": {
+                        "sections": [
+                            {
+                                "title": "Opciones disponibles",
+                                "rows": [
+                                    {
+                                        "id": f"opt_{i}",
+                                        "title": opcion[:24]  # Límite de WhatsApp
+                                    } for i, opcion in enumerate(opciones)
+                                ]
+                            }
+                        ],
+                        "label": "Ver opciones"
                     }
                 }
+            }
         else:
-            # Mensaje de texto simple
-            url = f"{api_url}/messages/text"
+            # Mensaje de texto normal
+            url = f"{settings.WHAPI_API_URL}/messages/text"
             payload = {
                 "to": numero_destino,
                 "body": mensaje
             }
-            
-            # Si hay opciones pero no es tipo "opciones", añadir al texto
-            if opciones and len(opciones) > 0:
-                opciones_texto = "\n".join([f"• {i+1}. {opcion}" for i, opcion in enumerate(opciones)])
-                payload["body"] += f"\n\nOpciones disponibles:\n{opciones_texto}"
+
+        logger.debug(f"Enviando payload: {json.dumps(payload, indent=2)}")
         
-        # Debug: mostrar URL y payload
-        logger.debug(f"URL: {url}")
-        logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        # Enviar el mensaje
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=headers, timeout=15.0)
-            
-            # Log detallado de la respuesta
-            logger.debug(f"Status: {response.status_code}")
-            logger.debug(f"Response: {response.text}")
+            response = await client.post(url, json=payload, headers=headers)
             
             if response.status_code != 200:
-                logger.error(f"Error enviando mensaje: {response.status_code} - {response.text}")
+                logger.error(f"Error: {response.status_code} - {response.text}")
                 return {"success": False, "error": response.text}
             
-            response_data = response.json()
-            logger.info(f"Mensaje enviado correctamente: {response_data.get('id', 'unknown')}")
-            
-            return {
-                "success": True, 
-                "message_id": response_data.get("id"),
-                "response": response_data
-            }
+            return {"success": True, "response": response.json()}
             
     except Exception as e:
-        logger.exception(f"Error enviando mensaje WhatsApp: {str(e)}")
+        logger.exception(f"Error enviando mensaje: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
