@@ -387,3 +387,36 @@ async def procesar_respuesta(
     except Exception as e:
         logger.error(f"Error procesando respuesta: {str(e)}")
         raise
+
+
+async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> ConversacionEncuesta:
+    """
+    Crea el registro ConversacionEncuesta y deja apuntada la
+    primera pregunta en pregunta_actual_id.
+    """
+    entrega = get_entrega_con_plantilla(db, entrega_id)
+    if not entrega or not entrega.destinatario.telefono:
+        raise ValueError("Entrega no válida o sin número de teléfono")
+
+    primera_pregunta = (
+        db.query(PreguntaEncuesta)
+        .join(PlantillaEncuesta)
+        .join(CampanaEncuesta)
+        .join(EntregaEncuesta)
+        .filter(EntregaEncuesta.id == entrega_id)
+        .order_by(PreguntaEncuesta.orden)
+        .first()
+    )
+    if not primera_pregunta:
+        raise ValueError("No se encontraron preguntas en la plantilla")
+
+    conversacion = ConversacionEncuesta(
+        entrega_id=entrega_id,
+        completada=False,
+        historial=[],
+        pregunta_actual_id=primera_pregunta.id
+    )
+    db.add(conversacion)
+    db.commit()
+    db.refresh(conversacion)
+    return conversacion

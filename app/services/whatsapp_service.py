@@ -24,6 +24,7 @@ async def _post(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """POST genérico con manejo de errores y logging."""
     headers = {
         "Authorization": f"Bearer {settings.WHAPI_TOKEN}",
+        "Accept": "application/json",
         "Content-Type": "application/json",
     }
     url = f"{settings.WHAPI_API_URL}{endpoint}"

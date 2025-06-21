@@ -25,6 +25,7 @@ from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
 from app.services.conversacion_service import generar_siguiente_pregunta
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.vapi_service import crear_llamada_encuesta
+from app.services.conversacion_service import iniciar_conversacion_whatsapp
 
 logger = logging.getLogger(__name__)
 
@@ -182,40 +183,6 @@ def get_entrega_by_destinatario(
         
     # Ordenar por enviado_en en lugar de created_at
     return query.order_by(EntregaEncuesta.enviado_en.desc().nullslast()).first()
-
-async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> ConversacionEncuesta:
-    """Inicia una nueva conversación de encuesta"""
-    entrega = get_entrega_con_plantilla(db, entrega_id)
-    if not entrega or not entrega.destinatario.telefono:
-        raise ValueError("Entrega no válida o sin número de teléfono")
-
-    # Obtener la primera pregunta
-    primera_pregunta = (
-        db.query(PreguntaEncuesta)
-        .join(PlantillaEncuesta)
-        .join(CampanaEncuesta)
-        .join(EntregaEncuesta)
-        .filter(EntregaEncuesta.id == entrega_id)
-        .order_by(PreguntaEncuesta.orden)
-        .first()
-    )
-
-    if not primera_pregunta:
-        raise ValueError("No se encontraron preguntas en la plantilla")
-
-    # Crear nueva conversación con la primera pregunta
-    conversacion = ConversacionEncuesta(
-        entrega_id=entrega_id,
-        completada=False,
-        historial=[],
-        pregunta_actual_id=primera_pregunta.id  # Asignar la primera pregunta
-    )
-    
-    db.add(conversacion)
-    db.commit()
-    db.refresh(conversacion)
-
-    return conversacion
 
 async def create_entrega(
     db: Session, 
