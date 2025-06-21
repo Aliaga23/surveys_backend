@@ -10,7 +10,8 @@ from openai import AsyncOpenAI
 from app.core.config import settings
 from app.models.survey import (
     CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta,
-    PlantillaEncuesta, PreguntaEncuesta
+    PlantillaEncuesta, PreguntaEncuesta,
+    RespuestaEncuesta, RespuestaPregunta
 )
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.respuestas_service import crear_respuesta_encuesta
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 # --------------------------------------------------------------------------- #
-# UTILIDADES GPT (opcional, las mantengo porque ya las usas)
+# GPT util (solo cuando hay que desambiguar opciones 3/4)
 # --------------------------------------------------------------------------- #
 
 SYSTEM_PROMPT = """
@@ -48,23 +49,19 @@ async def generar_siguiente_pregunta(
     return rsp.choices[0].message.content.strip()
 
 # --------------------------------------------------------------------------- #
-#  ANALÍTICA DE RESPUESTAS (recortado a lo esencial)
+#  Desambiguar opciones con GPT cuando no hay match exacto
 # --------------------------------------------------------------------------- #
 
 async def _match_opcion_ai(
     respuesta: str, opciones: List[str], multiple: bool
 ) -> Tuple[Any, str]:
-    """
-    Devuelve el/los índice(s) seleccionados o (None, error_msg)
-    multiple = False → tipo 3   |  multiple = True → tipo 4
-    """
-    # Intento de coincidencia exacta
+    # Coincidencia exacta primero
     if not multiple:
         for i, op in enumerate(opciones):
             if respuesta.strip().lower() == op.lower():
                 return i, ""
     else:
-        exactos = []
+        exactos: List[int] = []
         for trozo in [t.strip().lower() for t in respuesta.split(",")]:
             for i, op in enumerate(opciones):
                 if trozo == op.lower():
@@ -72,11 +69,11 @@ async def _match_opcion_ai(
         if exactos:
             return exactos, ""
 
-    # Si falla coincidencia exacta, consultamos GPT rápido
+    # GPT
     prompt = (
         f"Opciones: {', '.join(opciones)}\n"
         f"Respuesta: {respuesta}\n"
-        f"Devuelve sólo índices {'separados por coma' if multiple else 'numérico'} "
+        f"Devuelve índices {'separados por coma' if multiple else 'numérico'} "
         f"o 'ERROR' si no se entiende."
     )
     rsp = await client.chat.completions.create(
@@ -88,12 +85,11 @@ async def _match_opcion_ai(
     if txt.upper().startswith("ERROR"):
         return None, "No pude identificar tu selección. Elige exactamente de la lista."
     try:
-        idx = [int(n) for n in re.findall(r"\d+", txt)]
-        if not multiple:
-            if idx and 0 <= idx[0] < len(opciones):
-                return idx[0], ""
-        else:
-            buenos = [i for i in idx if 0 <= i < len(opciones)]
+        nums = [int(n) for n in re.findall(r"\d+", txt)]
+        if not multiple and nums and 0 <= nums[0] < len(opciones):
+            return nums[0], ""
+        if multiple:
+            buenos = [i for i in nums if 0 <= i < len(opciones)]
             if buenos:
                 return buenos, ""
         return None, "La opción seleccionada no es válida."
@@ -108,10 +104,6 @@ async def _match_opcion_ai(
 async def procesar_respuesta(
     db: Session, conversacion_id: UUID, respuesta: str
 ) -> Dict[str, Any]:
-    """
-    Procesa la respuesta del usuario y decide el siguiente paso.
-    Devuelve un dict uniforme (ver descripción arriba).
-    """
     conv = (
         db.query(ConversacionEncuesta)
         .options(joinedload(ConversacionEncuesta.entrega)
@@ -126,7 +118,7 @@ async def procesar_respuesta(
     if conv.completada:
         return {"completada": True}
 
-    # ---------- agregar al historial ----------
+    # Historial
     conv.historial = conv.historial or []
     conv.historial.append({
         "role": "user",
@@ -134,7 +126,7 @@ async def procesar_respuesta(
         "timestamp": datetime.now().isoformat()
     })
 
-    # ---------- pregunta actual ----------
+    # Pregunta actual
     pregunta = (
         db.query(PreguntaEncuesta)
         .options(joinedload(PreguntaEncuesta.opciones))
@@ -144,60 +136,81 @@ async def procesar_respuesta(
     if not pregunta:
         raise ValueError("Pregunta actual no encontrada")
 
-    # ---------- validar respuesta ----------
+    # Validar -> valor
     valor: Any = None
-    if pregunta.tipo_pregunta_id == 1:           # texto libre
+    if pregunta.tipo_pregunta_id == 1:          # texto
         valor = respuesta
 
-    elif pregunta.tipo_pregunta_id == 2:         # numérico
+    elif pregunta.tipo_pregunta_id == 2:        # número
         try:
             valor = float(respuesta.strip())
         except ValueError:
             return {"error": "Por favor ingresa un número válido."}
 
-    elif pregunta.tipo_pregunta_id in (3, 4):    # opciones
-        ops = [o.texto for o in pregunta.opciones]
+    elif pregunta.tipo_pregunta_id in (3, 4):   # opciones
+        opciones = [o.texto for o in pregunta.opciones]
         idxs, err = await _match_opcion_ai(
-            respuesta, ops, multiple=(pregunta.tipo_pregunta_id == 4)
+            respuesta, opciones, multiple=(pregunta.tipo_pregunta_id == 4)
         )
         if err:
-            listado = "\n".join(f"• {t}" for t in ops)
-            return {"error": f"{err}\nOpciones disponibles:\n{listado}"}
+            lista = "\n".join(f"• {t}" for t in opciones)
+            return {"error": f"{err}\nOpciones disponibles:\n{lista}"}
         valor = idxs
 
-    # TODO: guardar valor_procesado en la tabla de respuestas si procede
-    # (omito el detalle para enfocarnos en el flujo)
+    # ------------------------------------------------------------------ #
+    # GUARDAR EN BD
+    # ------------------------------------------------------------------ #
+    # Cabecera
+    if not conv.respuesta_id:
+        r_enc = RespuestaEncuesta(entrega_id=conv.entrega_id)
+        db.add(r_enc); db.commit(); db.refresh(r_enc)
+        conv.respuesta_id = r_enc.id; db.commit()
+    else:
+        r_enc = db.query(RespuestaEncuesta).get(conv.respuesta_id)
 
-    # ---------- decidir siguiente pregunta ----------
+    # Detalle
+    if pregunta.tipo_pregunta_id == 1:
+        detalle = RespuestaPregunta(
+            respuesta_id=r_enc.id, pregunta_id=pregunta.id, texto=valor
+        )
+    elif pregunta.tipo_pregunta_id == 2:
+        detalle = RespuestaPregunta(
+            respuesta_id=r_enc.id, pregunta_id=pregunta.id, numero=valor
+        )
+    elif pregunta.tipo_pregunta_id == 3:
+        opcion = pregunta.opciones[valor]
+        detalle = RespuestaPregunta(
+            respuesta_id=r_enc.id, pregunta_id=pregunta.id, opcion_id=opcion.id
+        )
+    else:  # multiselección
+        ids = [pregunta.opciones[i].id for i in valor]
+        detalle = RespuestaPregunta(
+            respuesta_id=r_enc.id, pregunta_id=pregunta.id,
+            metadatos={"opciones": ids}
+        )
+    db.add(detalle); db.commit()
+
+    # ------------------------------------------------------------------ #
+    # Buscar siguiente pregunta
+    # ------------------------------------------------------------------ #
     todas = (
         db.query(PreguntaEncuesta)
-        .join(PlantillaEncuesta)
-        .join(CampanaEncuesta)
-        .join(EntregaEncuesta)
+        .join(PlantillaEncuesta).join(CampanaEncuesta).join(EntregaEncuesta)
         .filter(EntregaEncuesta.id == conv.entrega_id)
         .order_by(PreguntaEncuesta.orden)
         .all()
     )
-    siguiente = None
-    for idx, q in enumerate(todas):
-        if q.id == pregunta.id and idx + 1 < len(todas):
-            siguiente = todas[idx + 1]
-            break
+    pos = {p.id: i for i, p in enumerate(todas)}[pregunta.id]
+    siguiente = todas[pos + 1] if pos + 1 < len(todas) else None
 
-    if not siguiente:   # terminó la encuesta
-        conv.completada = True
-        db.commit()
-        resp = await crear_respuesta_encuesta(db, conv.entrega_id, conv.historial)
-        return {
-            "completada": True,
-            "respuesta_id": str(resp.id)
-        }
+    if not siguiente:  # fin
+        conv.completada = True; db.commit()
+        resumen = await crear_respuesta_encuesta(db, conv.entrega_id, conv.historial)
+        return {"completada": True, "respuesta_id": str(resumen.id)}
 
-    # actualizar puntero y commit
-    conv.pregunta_actual_id = siguiente.id
-    db.commit()
+    # Avanzar puntero
+    conv.pregunta_actual_id = siguiente.id; db.commit()
 
-    # preparar salida uniforme
     salida = {
         "completada": False,
         "siguiente_pregunta": siguiente.texto,
@@ -208,18 +221,19 @@ async def procesar_respuesta(
     return salida
 
 # --------------------------------------------------------------------------- #
-#  INICIAR CONVERSACIÓN (ya lo movimos aquí para uso global)
+# Iniciar conversación por WhatsApp (usado por router / entregas)
 # --------------------------------------------------------------------------- #
 
-async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> ConversacionEncuesta:
+async def iniciar_conversacion_whatsapp(
+    db: Session, entrega_id: UUID
+) -> ConversacionEncuesta:
     entrega = get_entrega_con_plantilla(db, entrega_id)
     if not entrega or not entrega.destinatario.telefono:
         raise ValueError("Entrega no válida o sin teléfono")
 
     primera = (
         db.query(PreguntaEncuesta)
-        .join(PlantillaEncuesta).join(CampanaEncuesta)
-        .join(EntregaEncuesta)
+        .join(PlantillaEncuesta).join(CampanaEncuesta).join(EntregaEncuesta)
         .filter(EntregaEncuesta.id == entrega_id)
         .order_by(PreguntaEncuesta.orden).first()
     )
@@ -232,7 +246,5 @@ async def iniciar_conversacion_whatsapp(db: Session, entrega_id: UUID) -> Conver
         historial=[],
         pregunta_actual_id=primera.id
     )
-    db.add(conv)
-    db.commit()
-    db.refresh(conv)
+    db.add(conv); db.commit(); db.refresh(conv)
     return conv

@@ -5,31 +5,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def _extract_text_and_payload(msg: Dict[str, Any]) -> Tuple[str, str]:
     mtype = msg.get("type")
 
-    if mtype == "button":
+    if mtype == "button":                          # Android/iOS direct
         btn = msg.get("button", {})
         return btn.get("text", ""), btn.get("payload", "")
 
-   
-    if mtype == "text" and msg.get("context", {}).get("id"):
-        return msg.get("text", {}).get("body", ""), ""
-
-    # Listas y reply-buttons empaquetados en "interactive"
-    if mtype == "interactive":
+    if mtype == "interactive":                     # reply-button / lista
         data = msg.get("interactive", {})
         if data.get("type") == "button_reply":
-            br = data.get("button_reply", {})
+            br = data["button_reply"]
             return br.get("title", ""), br.get("id", "")
         if data.get("type") == "list_reply":
-            lr = data.get("list_reply", {})
+            lr = data["list_reply"]
             return lr.get("title", ""), lr.get("id", "")
 
-    # Texto normal
-    if mtype == "text":
-        return msg.get("text", {}).get("body", ""), ""
+    # 🔸  iOS al reenviar un mensaje interactivo
+    if mtype == "text" and msg.get("context", {}).get("id"):
+        return msg["text"]["body"], ""            # payload vacío, pero texto sirve
+
+    if mtype == "text":                           # texto normal
+        return msg["text"]["body"], ""
 
     return "", ""
 
