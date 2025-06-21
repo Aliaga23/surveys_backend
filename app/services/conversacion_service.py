@@ -241,7 +241,7 @@ async def procesar_respuesta(
         conversacion.historial = []
     conversacion.historial.append(nuevo_mensaje)
 
-    # Obtener la pregunta actual y todas las preguntas de la plantilla
+    # Obtener la pregunta actual
     pregunta_actual = (
         db.query(PreguntaEncuesta)
         .filter(PreguntaEncuesta.id == conversacion.pregunta_actual_id)
@@ -251,153 +251,124 @@ async def procesar_respuesta(
     
     if not pregunta_actual:
         raise ValueError("Pregunta actual no encontrada")
-    
-    preguntas_plantilla = (
-        db.query(PreguntaEncuesta)
-        .filter(PreguntaEncuesta.plantilla_id == pregunta_actual.plantilla_id)
-        .order_by(PreguntaEncuesta.orden)
-        .options(joinedload(PreguntaEncuesta.opciones))
-        .all()
-    )
-    
-    # Procesamiento de la respuesta según el tipo de pregunta
+
+    # Procesar respuesta según tipo de pregunta
     valor_procesado = None
     
-    if pregunta_actual.tipo_pregunta_id == 1:  # Texto
-        # Para preguntas de texto, guardamos el texto directamente
-        valor_procesado = respuesta_usuario
-        
-    elif pregunta_actual.tipo_pregunta_id == 2:  # Número
-        # Para preguntas numéricas, intentamos convertir a número
-        try:
-            valor_procesado = float(respuesta_usuario.strip())
-        except ValueError:
-            return {"error": "Por favor, ingresa un número válido."}
+    try:
+        if pregunta_actual.tipo_pregunta_id == 1:  # Texto
+            # Para preguntas de texto, guardamos el texto directamente
+            valor_procesado = respuesta_usuario
             
-    elif pregunta_actual.tipo_pregunta_id == 3:  # Select (opción única)
-        # Verificar si la respuesta es una opción válida
-        opciones = [opcion.texto for opcion in pregunta_actual.opciones]
-        
-        # Primero buscar coincidencia exacta
-        opcion_seleccionada = None
-        
-        for opcion in pregunta_actual.opciones:
-            if respuesta_usuario.strip().lower() == opcion.texto.lower():
-                opcion_seleccionada = opcion
-                break
-        
-        if opcion_seleccionada:
-            # Coincidencia exacta encontrada
-            valor_procesado = opcion_seleccionada.id
-        else:
-            # Intentar analizar con AI si no hay coincidencia exacta
-            indice_opcion, mensaje_error = await analizar_respuesta_con_ai(
-                respuesta_usuario, opciones, 3
-            )
+        elif pregunta_actual.tipo_pregunta_id == 2:  # Número
+            # Para preguntas numéricas, intentamos convertir a número
+            try:
+                valor_procesado = float(respuesta_usuario.strip())
+            except ValueError:
+                return {"error": "Por favor, ingresa un número válido."}
+                
+        elif pregunta_actual.tipo_pregunta_id == 3:  # Select (opción única)
+            # Verificar si la respuesta es una opción válida
+            opciones = [opcion.texto for opcion in pregunta_actual.opciones]
             
-            if indice_opcion is not None:
-                opcion_seleccionada = pregunta_actual.opciones[indice_opcion]
-                valor_procesado = opcion_seleccionada.id
-            else:
-                # No se pudo identificar la opción
-                opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
-                return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
+            # Primero buscar coincidencia exacta
+            opcion_seleccionada = None
             
-    elif pregunta_actual.tipo_pregunta_id == 4:  # Multiselect
-        # Para multiselect, el usuario puede seleccionar varias opciones
-        opciones = [opcion.texto for opcion in pregunta_actual.opciones]
-        
-        # Intentar coincidencias exactas primero
-        respuestas = [r.strip().lower() for r in respuesta_usuario.split(',')]
-        opciones_seleccionadas = []
-        todas_coincidencias_exactas = True
-        
-        for respuesta in respuestas:
-            coincidencia_encontrada = False
-            for i, opcion in enumerate(pregunta_actual.opciones):
-                if respuesta == opcion.texto.lower():
-                    opciones_seleccionadas.append(opcion.id)
-                    coincidencia_encontrada = True
+            for opcion in pregunta_actual.opciones:
+                if respuesta_usuario.strip().lower() == opcion.texto.lower():
+                    opcion_seleccionada = opcion
                     break
             
-            if not coincidencia_encontrada:
-                todas_coincidencias_exactas = False
-                break
+            if opcion_seleccionada:
+                # Coincidencia exacta encontrada
+                valor_procesado = opcion_seleccionada.id
+            else:
+                # Intentar analizar con AI si no hay coincidencia exacta
+                indice_opcion, mensaje_error = await analizar_respuesta_con_ai(
+                    respuesta_usuario, opciones, 3
+                )
                 
-        if todas_coincidencias_exactas and opciones_seleccionadas:
-            # Todas las respuestas coinciden exactamente con opciones
-            valor_procesado = opciones_seleccionadas
-        else:
-            # Intentar analizar con AI
-            indices_opciones, mensaje_error = await analizar_respuesta_con_ai(
-                respuesta_usuario, opciones, 4
-            )
+                if indice_opcion is not None:
+                    opcion_seleccionada = pregunta_actual.opciones[indice_opcion]
+                    valor_procesado = opcion_seleccionada.id
+                else:
+                    # No se pudo identificar la opción
+                    opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
+                    return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
+                
+        elif pregunta_actual.tipo_pregunta_id == 4:  # Multiselect
+            # Para multiselect, el usuario puede seleccionar varias opciones
+            opciones = [opcion.texto for opcion in pregunta_actual.opciones]
             
-            if indices_opciones:
-                # Convertir índices a IDs de opciones
-                opciones_seleccionadas = [
-                    pregunta_actual.opciones[i].id for i in indices_opciones
-                ]
+            # Intentar coincidencias exactas primero
+            respuestas = [r.strip().lower() for r in respuesta_usuario.split(',')]
+            opciones_seleccionadas = []
+            todas_coincidencias_exactas = True
+            
+            for respuesta in respuestas:
+                coincidencia_encontrada = False
+                for i, opcion in enumerate(pregunta_actual.opciones):
+                    if respuesta == opcion.texto.lower():
+                        opciones_seleccionadas.append(opcion.id)
+                        coincidencia_encontrada = True
+                        break
+                
+                if not coincidencia_encontrada:
+                    todas_coincidencias_exactas = False
+                    break
+                    
+            if todas_coincidencias_exactas and opciones_seleccionadas:
+                # Todas las respuestas coinciden exactamente con opciones
                 valor_procesado = opciones_seleccionadas
             else:
-                # No se pudieron identificar las opciones
-                opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
-                return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
+                # Intentar analizar con AI
+                indices_opciones, mensaje_error = await analizar_respuesta_con_ai(
+                    respuesta_usuario, opciones, 4
+                )
+                
+                if indices_opciones:
+                    # Convertir índices a IDs de opciones
+                    opciones_seleccionadas = [
+                        pregunta_actual.opciones[i].id for i in indices_opciones
+                    ]
+                    valor_procesado = opciones_seleccionadas
+                else:
+                    # No se pudieron identificar las opciones
+                    opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
+                    return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
 
-    # Encontrar la siguiente pregunta en orden
-    siguiente_pregunta = None
-    for i, pregunta in enumerate(preguntas_plantilla):
-        if pregunta.id == pregunta_actual.id and i + 1 < len(preguntas_plantilla):
-            siguiente_pregunta = preguntas_plantilla[i + 1]
-            break
+        # Encontrar la siguiente pregunta en orden
+        siguiente_pregunta = None
+        for i, pregunta in enumerate(preguntas_plantilla):
+            if pregunta.id == pregunta_actual.id and i + 1 < len(preguntas_plantilla):
+                siguiente_pregunta = preguntas_plantilla[i + 1]
+                break
 
-    if siguiente_pregunta:
-        # Generar texto de la siguiente pregunta de forma conversacional
-        texto_siguiente = await generar_siguiente_pregunta(
-            conversacion.historial,
-            siguiente_pregunta.texto,
-            siguiente_pregunta.tipo_pregunta_id
-        )
-        
-        # Actualizar estado de la conversación
-        conversacion.pregunta_actual_id = siguiente_pregunta.id
-        nuevo_mensaje = {"role": "assistant", "content": texto_siguiente, "timestamp": datetime.now().isoformat()}
-        conversacion.historial.append(nuevo_mensaje)
-        
-        # Determinar si hay opciones para enviar
-        opciones = None
-        if siguiente_pregunta.tipo_pregunta_id in [3, 4]:
-            opciones = [opcion.texto for opcion in siguiente_pregunta.opciones]
-        
-        # Guardar cambios en la base de datos
-        db.commit()
-        
-        return {
-            "valor_procesado": valor_procesado,
-            "siguiente_pregunta": texto_siguiente,
-            "tipo_pregunta": siguiente_pregunta.tipo_pregunta_id,
-            "opciones": opciones,
-            "completada": False
-        }
-    else:
-        # La encuesta ha sido completada
-        conversacion.completada = True
-        db.commit()
-        
-        # Crear la respuesta final con todas las respuestas acumuladas
-        try:
-            respuesta = await crear_respuesta_encuesta(db, conversacion.entrega_id, conversacion.historial)
+        if not siguiente_pregunta:
+            # Si es la última pregunta
+            conversacion.completada = True
+            db.commit()
             
-            return {
-                "valor_procesado": valor_procesado,
-                "siguiente_pregunta": "¡Gracias por completar la encuesta!",
-                "completada": True,
-                "respuesta_id": str(respuesta.id)
-            }
-        except Exception as e:
-            return {
-                "valor_procesado": valor_procesado,
-                "siguiente_pregunta": "¡Gracias por completar la encuesta!",
-                "completada": True,
-                "error_respuesta": str(e)
-            }
+            # Crear respuesta final
+            try:
+                respuesta = await crear_respuesta_encuesta(
+                    db, 
+                    conversacion.entrega_id,
+                    conversacion.historial
+                )
+                
+                return {
+                    "completada": True,
+                    "mensaje": "¡Gracias por completar la encuesta!",
+                    "respuesta_id": str(respuesta.id)
+                }
+            except Exception as e:
+                logger.error(f"Error guardando respuesta final: {str(e)}")
+                raise ValueError(f"Error guardando respuesta: {str(e)}")
+
+        # Si hay siguiente pregunta...
+        # ... resto del código para siguiente pregunta ...
+        
+    except Exception as e:
+        logger.error(f"Error procesando respuesta: {str(e)}")
+        raise

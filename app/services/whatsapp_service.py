@@ -111,22 +111,14 @@ async def enviar_mensaje_whatsapp(
 async def procesar_webhook_whatsapp(payload: Dict) -> Dict:
     """
     Procesa un webhook recibido de Whapi y extrae la información relevante.
-    
-    Args:
-        payload: Payload completo del webhook
-    
-    Returns:
-        Dict con información estructurada del mensaje
     """
     try:
-        # Verificar si es un mensaje de estado
         if "statuses" in payload:
             return {
                 "tipo": "estado",
-                "detalles": payload.get("statuses", [{}])[0] if payload.get("statuses") else {}
+                "detalles": payload.get("statuses", [{}])[0]
             }
             
-        # Verificar si es un mensaje
         if "messages" not in payload or not payload["messages"]:
             return {"tipo": "desconocido", "detalles": {}}
             
@@ -135,25 +127,50 @@ async def procesar_webhook_whatsapp(payload: Dict) -> Dict:
         # Si es un mensaje enviado por nosotros mismos
         if mensaje.get("from_me", False):
             return {"tipo": "propio", "detalles": mensaje}
+
+        # Procesar mensajes interactivos (botones/listas)
+        if mensaje.get("type") == "interactive":
+            interactive_data = mensaje.get("interactive", {})
+            if interactive_data.get("type") == "button_reply":
+                # Respuesta de botón
+                button_reply = interactive_data.get("button_reply", {})
+                return {
+                    "tipo": "mensaje",
+                    "numero": mensaje.get("from", "").split("@")[0],
+                    "texto": button_reply.get("title", ""),  # Usar el título del botón como texto
+                    "mensaje_id": mensaje.get("id"),
+                    "timestamp": mensaje.get("timestamp"),
+                    "detalles": mensaje,
+                    "interactivo": True
+                }
+            elif interactive_data.get("type") == "list_reply":
+                # Respuesta de lista
+                list_reply = interactive_data.get("list_reply", {})
+                return {
+                    "tipo": "mensaje",
+                    "numero": mensaje.get("from", "").split("@")[0],
+                    "texto": list_reply.get("title", ""),  # Usar el título seleccionado como texto
+                    "mensaje_id": mensaje.get("id"),
+                    "timestamp": mensaje.get("timestamp"),
+                    "detalles": mensaje,
+                    "interactivo": True
+                }
         
-        # Si no es un mensaje de texto
-        if mensaje.get("type") != "text":
+        # Mensaje de texto normal
+        if mensaje.get("type") == "text":
             return {
-                "tipo": "no_texto",
-                "subtipo": mensaje.get("type", "desconocido"),
-                "detalles": mensaje
+                "tipo": "mensaje",
+                "numero": mensaje.get("from", "").split("@")[0],
+                "texto": mensaje.get("text", {}).get("body", ""),
+                "mensaje_id": mensaje.get("id"),
+                "timestamp": mensaje.get("timestamp"),
+                "detalles": mensaje,
+                "interactivo": False
             }
-        
-        # Es un mensaje de texto válido
-        numero = mensaje.get("from", "").split("@")[0] if "@" in mensaje.get("from", "") else mensaje.get("from", "")
-        texto = mensaje.get("text", {}).get("body", "")
-        
+            
         return {
-            "tipo": "mensaje",
-            "numero": numero,
-            "texto": texto,
-            "mensaje_id": mensaje.get("id"),
-            "timestamp": mensaje.get("timestamp"),
+            "tipo": "no_texto",
+            "subtipo": mensaje.get("type", "desconocido"),
             "detalles": mensaje
         }
         

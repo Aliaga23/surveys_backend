@@ -66,8 +66,8 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             return {"success": True, "message": "Own message ignored"}
             
         # Si no es un mensaje válido, terminar
-        if resultado["tipo"] != "mensaje":
-            return {"success": True, "message": f"Unprocessable message type: {resultado['tipo']}"}
+        if resultado["tipo"] not in ["mensaje"]:
+            return {"success": True, "message": f"Ignoring {resultado['tipo']}"}
         
         # Extraer información del mensaje
         numero = resultado["numero"]
