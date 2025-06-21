@@ -5,6 +5,10 @@ from datetime import datetime
 from openai import AsyncOpenAI
 import re
 import json
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 from app.models.survey import (
     CampanaEncuesta, ConversacionEncuesta, EntregaEncuesta, 
@@ -336,6 +340,17 @@ async def procesar_respuesta(
                     # No se pudieron identificar las opciones
                     opciones_texto = "\n".join([f"• {op.texto}" for op in pregunta_actual.opciones])
                     return {"error": f"{mensaje_error}\n\nOpciones disponibles:\n{opciones_texto}"}
+
+        # Obtener todas las preguntas de la plantilla en orden
+        preguntas_plantilla = (
+            db.query(PreguntaEncuesta)
+            .join(PlantillaEncuesta)
+            .join(CampanaEncuesta)
+            .join(EntregaEncuesta)
+            .filter(EntregaEncuesta.id == conversacion.entrega_id)
+            .order_by(PreguntaEncuesta.orden)
+            .all()
+        )
 
         # Encontrar la siguiente pregunta en orden
         siguiente_pregunta = None
