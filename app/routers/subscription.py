@@ -182,6 +182,11 @@ def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depen
         suscriptor.stripe_customer_id = customer.id
         db.commit()
 
+    frontend_url = settings.FRONTEND_URL
+    # Concatenamos "https://" si no está presente en el frontend_url
+    if not frontend_url.startswith("http://") and not frontend_url.startswith("https://"):
+        frontend_url = "https://" + frontend_url
+
     checkout_session = stripe.checkout.Session.create(
         customer=suscriptor.stripe_customer_id,
         line_items=[{
@@ -189,8 +194,8 @@ def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depen
             'quantity': 1,
         }],
         mode='subscription',
-        success_url=f'{settings.FRONTEND_URL}/dashboard-suscriptor/planes/success?session_id={{CHECKOUT_SESSION_ID}}',  # URL personalizada de éxito
-        cancel_url=f'{settings.FRONTEND_URL}/dashboard-suscriptor/planes/cancel',  # URL personalizada de cancelación
+        success_url=f'{frontend_url}/dashboard-suscriptor/planes/success?session_id={{CHECKOUT_SESSION_ID}}',
+        cancel_url=f'{frontend_url}/dashboard-suscriptor/planes/cancel',
     )
 
     # Registrar en la base de datos
@@ -205,6 +210,7 @@ def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depen
     db.commit()
 
     return {"checkout_url": checkout_session.url}
+
 
 
 
