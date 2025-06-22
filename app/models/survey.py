@@ -80,7 +80,7 @@ class EntregaEncuesta(Base):
     __tablename__ = "entrega_encuesta"
     id              = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     campana_id      = Column(PGUUID(as_uuid=True), ForeignKey("campana_encuesta.id", ondelete="CASCADE"), nullable=False)
-    destinatario_id = Column(PGUUID(as_uuid=True), ForeignKey("destinatario.id", ondelete="CASCADE"), nullable=False)
+    destinatario_id = Column(PGUUID(as_uuid=True), ForeignKey("destinatario.id", ondelete="CASCADE"), nullable=True)
     canal_id        = Column(Integer, ForeignKey("canal.id"), nullable=False)
     estado_id       = Column(Integer, ForeignKey("estado_entrega.id"), default=1)
     enviado_en      = Column(TIMESTAMP(timezone=True))

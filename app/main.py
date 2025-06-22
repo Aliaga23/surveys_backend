@@ -11,7 +11,7 @@ from app.routers import vapi_router
 from app.routers import analytics_router
 #from app.routers import nlp_router
 from app.routers import encuestas_router
-
+from app.routers import pdf_router
 app = FastAPI(title="Mi API SaaS", version="0.1.0")
 
 app.add_middleware(
@@ -43,7 +43,7 @@ app.include_router(vapi_router.router)
 app.include_router(analytics_router.router)
 #app.include_router(nlp_router.router)
 app.include_router(encuestas_router.router)
-
+app.include_router(pdf_router.router)
 @app.get("/", summary="Health check")
 async def health_check():
     return {"status": "ok", "message": "API running"}

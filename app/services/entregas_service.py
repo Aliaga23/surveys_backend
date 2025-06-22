@@ -91,7 +91,7 @@ def update_entrega(
 
 
 def delete_entrega(db: Session, entrega_id: UUID) -> bool:
-    entrega =get_entrega(db, entrega_id)
+    entrega = get_entrega(db, entrega_id)
     if not entrega:
         return False
     db.delete(entrega)
@@ -187,12 +187,18 @@ async def create_entrega(
     payload: EntregaCreate,
 ) -> EntregaEncuesta:
     """
-    Crea la entrega y dispara el canal correspondiente.
-
-    Canal 1 → Email  
-    Canal 2 → WhatsApp  
-    Canal 3 → Vapi (llamada)
+    Canal 1 → Email
+    Canal 2 → WhatsApp
+    Canal 3 → Vapi
+    Canal 4 → Papel (no envía nada; sin destinatario)
     """
+    # ─── Validación destinatario según canal ────────────────────────────
+    if payload.canal_id != 4 and payload.destinatario_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="destinatario_id requerido para este canal",
+        )
+
     entrega = EntregaEncuesta(
         **payload.model_dump(),
         campana_id=campana_id,
@@ -203,7 +209,14 @@ async def create_entrega(
     db.refresh(entrega)
 
     # ------------------------------------------------------------------ #
-    # CANAL EMAIL
+    # CANAL PAPEL  (NO envía nada)                                       #
+    # ------------------------------------------------------------------ #
+    if payload.canal_id == 4:
+        # Queda en PENDIENTE; luego se imprimirá con QR.
+        return entrega
+
+    # ------------------------------------------------------------------ #
+    # CANAL EMAIL                                                        #
     # ------------------------------------------------------------------ #
     if payload.canal_id == 1:
         try:
@@ -239,7 +252,7 @@ async def create_entrega(
             ) from exc
 
     # ------------------------------------------------------------------ #
-    # CANAL WHATSAPP
+    # CANAL WHATSAPP                                                     #
     # ------------------------------------------------------------------ #
     elif payload.canal_id == 2:
         try:
@@ -259,7 +272,7 @@ async def create_entrega(
             db.commit()
             db.refresh(entrega)
 
-            # registrar estado inicial en el cache en memoria
+            # registrar estado inicial en cache en memoria
             try:
                 from app.routers.whatsapp_router import conversaciones_estado  # noqa
                 num = (
@@ -279,7 +292,7 @@ async def create_entrega(
             ) from exc
 
     # ------------------------------------------------------------------ #
-    # CANAL VAPI (LLAMADA)
+    # CANAL VAPI (LLAMADA)                                               #
     # ------------------------------------------------------------------ #
     elif payload.canal_id == 3:
         try:
@@ -325,3 +338,29 @@ async def create_entrega(
             ) from exc
 
     return entrega
+
+
+# --------------------------------------------------------------------------- #
+# BULK DE ENTREGAS PAPEL                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def create_bulk_entregas_papel(
+    db: Session,
+    campana_id: UUID,
+    cantidad: int,
+) -> List[EntregaEncuesta]:
+    entregas: list[EntregaEncuesta] = []
+    for _ in range(cantidad):
+        e = EntregaEncuesta(
+            campana_id=campana_id,
+            canal_id=4,
+            destinatario_id=None,
+            estado_id=ESTADO_PENDIENTE,
+        )
+        db.add(e)
+        entregas.append(e)
+    db.commit()
+    for e in entregas:
+        db.refresh(e)
+    return entregas

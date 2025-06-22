@@ -3,11 +3,12 @@ from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel
 
+# ───────── modelos auxiliares ────────────────────────────────────────────
+
 class OpcionPublicaOut(BaseModel):
     id: UUID
     texto: str
     valor: Optional[str] = None
-    
     model_config = {"from_attributes": True}
 
 class PreguntaPublicaOut(BaseModel):
@@ -17,7 +18,6 @@ class PreguntaPublicaOut(BaseModel):
     tipo_pregunta_id: int
     obligatorio: bool
     opciones: List[OpcionPublicaOut] = []
-    
     model_config = {"from_attributes": True}
 
 class PlantillaPublicaOut(BaseModel):
@@ -25,25 +25,24 @@ class PlantillaPublicaOut(BaseModel):
     nombre: str
     descripcion: Optional[str] = None
     preguntas: List[PreguntaPublicaOut] = []
-    
     model_config = {"from_attributes": True}
 
 class DestinatarioPublicoOut(BaseModel):
-    nombre: str
+    nombre: Optional[str] = None
     email: Optional[str] = None
     telefono: Optional[str] = None
-    
     model_config = {"from_attributes": True}
+
 
 class EntregaPublicaOut(BaseModel):
     id: UUID
     plantilla: PlantillaPublicaOut
-    destinatario: DestinatarioPublicoOut
-    
+    destinatario: Optional[DestinatarioPublicoOut] = None   # ← opcional
     model_config = {"from_attributes": True}
 
+
 class EntregaBase(BaseModel):
-    destinatario_id: UUID
+    destinatario_id: Optional[UUID] = None
     canal_id: int
 
 class EntregaCreate(EntregaBase):
@@ -60,9 +59,8 @@ class EntregaOut(EntregaBase):
     estado_id: int
     enviado_en: Optional[datetime] = None
     respondido_en: Optional[datetime] = None
-
     model_config = {"from_attributes": True}
 
 class EntregaDetailOut(EntregaOut):
-    destinatario: dict
+    destinatario: Optional[dict] = None                   # ← opcional
     respuestas: List[dict] = []

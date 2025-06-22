@@ -9,6 +9,8 @@ from app.core.constants import ESTADO_RESPONDIDO
 from app.models.survey import PreguntaEncuesta, RespuestaEncuesta, RespuestaPregunta, EntregaEncuesta, RespuestaTemp
 from app.schemas.respuestas_schema import RespuestaEncuestaCreate, RespuestaEncuestaUpdate, RespuestaPreguntaCreate
 from app.services.shared_service import get_entrega_con_plantilla, mark_as_responded
+from decimal import Decimal
+
 logger = logging.getLogger(__name__)
 def validate_entrega_status(db: Session, entrega_id: UUID) -> EntregaEncuesta:
     """Valida que la entrega exista y pueda recibir respuestas"""
@@ -288,3 +290,119 @@ async def crear_respuesta_encuesta(
         logger.error(f"Error creando respuesta: {str(e)}")
         db.rollback()
         raise ValueError(f"Error al crear respuesta: {str(e)}")
+    
+
+async def registrar_respuestas_publicas(
+    db: Session,
+    entrega_id: UUID,
+    payload: dict,
+) -> RespuestaEncuesta:
+    """
+    • Valida la entrega y su plantilla  
+    • Crea (o reutiliza) RespuestaEncuesta  
+    • Inserta RespuestaPregunta según reglas:
+        tipo 1 → texto
+        tipo 2 → numero
+        tipo 3 → opcion_id (única)
+        tipo 4 → varias opciones_ids
+    • Marca la entrega como respondida
+    Devuelve el objeto RespuestaEncuesta recién guardado
+    """
+    entrega = get_entrega_con_plantilla(db, entrega_id)
+    if not entrega:
+        raise HTTPException(404, "Entrega no encontrada")
+
+    if entrega.estado_id == ESTADO_RESPONDIDO:
+        raise HTTPException(400, "La encuesta ya fue respondida")
+
+    plantilla = entrega.campana.plantilla
+    mapa_preguntas: dict[str, PreguntaEncuesta] = {
+        str(p.id): p for p in plantilla.preguntas
+    }
+
+    # ─── Reutilizar o crear RespuestaEncuesta ────────────────────────────
+    r_enc = (
+        db.query(RespuestaEncuesta)
+        .filter(RespuestaEncuesta.entrega_id == entrega_id)
+        .first()
+    )
+    if not r_enc:
+        r_enc = RespuestaEncuesta(entrega_id=entrega_id, raw_payload=payload)
+        db.add(r_enc)
+        db.commit()
+        db.refresh(r_enc)
+    else:
+        r_enc.raw_payload = payload  # guarda la versión cruda, por si acaso
+
+    # ─── Parsear respuestas_preguntas ────────────────────────────────────
+    for item in payload.get("respuestas_preguntas", []):
+        qid   = item.get("pregunta_id")
+        preg  = mapa_preguntas.get(qid)
+        if not preg:                       # id que no pertenece a la plantilla
+            continue
+
+        tipo  = preg.tipo_pregunta_id
+        texto = item.get("texto")
+        num   = item.get("numero")
+        op_id = item.get("opcion_id")
+        ops   = item.get("opciones_ids", [])
+        meta  = item.get("metadatos", {})
+
+        # ── Pregunta abierta texto ───────────────────────────────────────
+        if tipo == 1:
+            if not texto:                  # se esperaba texto
+                continue
+            det = RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=preg.id,
+                texto=texto.strip(),
+            )
+            db.add(det)
+
+        # ── Pregunta numérica ────────────────────────────────────────────
+        elif tipo == 2:
+            try:
+                numero = Decimal(str(num))
+            except Exception:
+                continue
+            det = RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=preg.id,
+                numero=numero,
+            )
+            db.add(det)
+
+        # ── Selección única ──────────────────────────────────────────────
+        elif tipo == 3:
+            # si viene lista, tomamos el primero; el resto a metadatos
+            if not op_id and ops:
+                op_id, *sobrantes = ops
+                meta.setdefault("sobrantes", sobrantes)
+            if not op_id:
+                continue
+            det = RespuestaPregunta(
+                respuesta_id=r_enc.id,
+                pregunta_id=preg.id,
+                opcion_id=UUID(op_id),
+                metadatos=meta,
+            )
+            db.add(det)
+
+        # ── Selección múltiple ───────────────────────────────────────────
+        elif tipo == 4:
+            if not ops:
+                continue
+            for oid in ops:
+                det = RespuestaPregunta(
+                    respuesta_id=r_enc.id,
+                    pregunta_id=preg.id,
+                    opcion_id=UUID(oid),
+                    metadatos=meta,
+                )
+                db.add(det)
+
+    db.commit()
+
+    # ─── Finalizar entrega ───────────────────────────────────────────────
+    mark_as_responded(db, entrega_id)
+    return r_enc
