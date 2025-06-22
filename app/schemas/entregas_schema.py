@@ -59,6 +59,8 @@ class EntregaOut(EntregaBase):
     estado_id: int
     enviado_en: Optional[datetime] = None
     respondido_en: Optional[datetime] = None
+    destinatario: Optional[DestinatarioPublicoOut] = None  # Make it optional
+    
     model_config = {"from_attributes": True}
 
 class EntregaDetailOut(EntregaOut):
