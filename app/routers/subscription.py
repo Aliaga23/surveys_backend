@@ -170,6 +170,7 @@ def iniciar_suscripcion_stripe(
 def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depends(get_db)):
     suscriptor = db.query(Suscriptor).filter_by(id=suscriptor_id).first()
     plan = db.query(PlanSuscripcion).filter_by(id=plan_id).first()
+    
     if not suscriptor or not plan:
         raise HTTPException(status_code=404, detail="Suscriptor o plan no encontrado")
 
@@ -188,8 +189,8 @@ def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depen
             'quantity': 1,
         }],
         mode='subscription',
-        success_url='https://example.com/success?session_id={CHECKOUT_SESSION_ID}',
-        cancel_url='https://example.com/cancel',
+        success_url=f'{settings.FRONTEND_URL}/dashboard-suscriptor/planes/success?session_id={{CHECKOUT_SESSION_ID}}',  # URL personalizada de éxito
+        cancel_url=f'{settings.FRONTEND_URL}/dashboard-suscriptor/planes/cancel',  # URL personalizada de cancelación
     )
 
     # Registrar en la base de datos
@@ -198,12 +199,13 @@ def crear_checkout_session(suscriptor_id: str, plan_id: int, db: Session = Depen
         plan_id=plan.id,
         inicia_en=datetime.utcnow(),
         estado="pendiente",
-        stripe_subscription_id=None  # aún no lo tenemos, llegará con el webhook
+        stripe_subscription_id=None  # Aún no lo tenemos, llegará con el webhook
     )
     db.add(nueva_suscripcion)
     db.commit()
 
     return {"checkout_url": checkout_session.url}
+
 
 
 # ---------------- STRIPE WEBHOOK ----------------
