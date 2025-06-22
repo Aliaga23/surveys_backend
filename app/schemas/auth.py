@@ -87,4 +87,11 @@ class OperatorProfileOut(UserProfileBase):
     suscriptor_id: UUID
     activo: bool
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    
 UserProfileOut = Union[AdminProfileOut, SuscriptorProfileOut, OperatorProfileOut]

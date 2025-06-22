@@ -1,5 +1,6 @@
 # app/routers/auth.py
 
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
@@ -14,13 +15,16 @@ from app.models.suscriptor import Suscriptor
 from app.models.cuenta_usuario import CuentaUsuario
 
 from app.schemas.auth import (
-    AdminCreate, AdminOut, AdminProfileOut, LoginRequest, OperatorProfileOut,
+    AdminCreate, AdminOut, AdminProfileOut, ForgotPasswordRequest, LoginRequest, OperatorProfileOut, ResetPasswordRequest,
     SuscriptorCreate, SuscriptorOut,
     CuentaUsuarioCreate, CuentaUsuarioOut, SuscriptorProfileOut,
     Token, UserProfileOut, TokenData
 )
 
 from uuid import UUID
+
+from app.services.email_service import enviar_email_recuperacion_contrasena, enviar_email_verificacion
+import secrets, jwt
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -318,3 +322,66 @@ def verify_registration(
         raise HTTPException(status_code=401, detail="Token inválido")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al activar la cuenta: {str(e)}")
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    email = payload.email
+
+    user = (
+        db.query(Administrador).filter_by(email=email).first()
+        or db.query(Suscriptor).filter_by(email=email).first()
+        or db.query(CuentaUsuario).filter_by(email=email).first()
+    )
+    if not user:
+        return {"message": "Si el correo está registrado, se enviará un enlace para restablecer la contraseña."}
+
+    reset_token = secrets.token_urlsafe(32)
+    token_data = {
+        "sub": email,
+        "reset_token": reset_token,
+        "exp": datetime.utcnow() + timedelta(hours=1)
+    }
+    token = jwt.encode(token_data, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+
+    enviado = await enviar_email_recuperacion_contrasena(
+        destinatario_email=email,
+        destinatario_nombre=getattr(user, "nombre", getattr(user, "nombre_completo", "")),
+        url_reset=reset_link
+    )
+
+    if not enviado:
+        raise HTTPException(status_code=500, detail="No se pudo enviar el correo de recuperación")
+
+    return {"message": "Correo enviado correctamente"}
+
+@router.post("/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    try:
+        decoded = jwt.decode(payload.token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        email = decoded["sub"]
+
+        user = (
+            db.query(Administrador).filter_by(email=email).first()
+            or db.query(Suscriptor).filter_by(email=email).first()
+            or db.query(CuentaUsuario).filter_by(email=email).first()
+        )
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        user.password_hash = hash_password(payload.new_password)
+        db.commit()
+
+        return {"message": "Contraseña actualizada correctamente"}
+
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="El token ha expirado")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Token inválido")
