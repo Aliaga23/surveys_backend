@@ -369,7 +369,6 @@ def create_bulk_entregas_papel(
     return entregas
 
 
-# app/services/entregas_service.py
 def create_bulk_entregas_audio(
     db: Session, campana_id: UUID, cantidad: int
 ) -> List[EntregaEncuesta]:
@@ -378,7 +377,7 @@ def create_bulk_entregas_audio(
     for _ in range(cantidad):
         e = EntregaEncuesta(
             campana_id=campana_id,
-            canal_id=5,                 # ❶ canal audio
+            canal_id=5,                 
             destinatario_id=None,
             estado_id=ESTADO_ENVIADO,
             enviado_en=now

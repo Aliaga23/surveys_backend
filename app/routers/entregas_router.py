@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.security import get_current_user, validate_subscriber_access
-from app.models.survey import PreguntaEncuesta
+from app.models.survey import CampanaEncuesta, EntregaEncuesta, PlantillaEncuesta, PreguntaEncuesta
 from app.schemas.auth import TokenData
 from app.schemas.entregas_schema import (
     EntregaCreate,
@@ -35,10 +35,10 @@ from app.services.entregas_service import (
     mark_as_responded,
     get_entrega_by_destinatario,
     get_entrega_con_plantilla,
-    ESTADO_RESPONDIDO,
+   
 )
 from app.services.respuestas_service import registrar_respuestas_publicas
-
+from app.core.constants import ESTADO_RESPONDIDO, ESTADO_PENDIENTE, ESTADO_ENVIADO
 
 # ─────────────────────────── Routers ─────────────────────────────────────
 router        = APIRouter(prefix="/campanas/{campana_id}/entregas", tags=["Entregas"])
@@ -289,3 +289,45 @@ async def create_bulk_audio_endpoint(
         raise HTTPException(400, "La campaña debe ser de canal 5 (audio grabado)")
 
     return create_bulk_entregas_audio(db, campana_id, cantidad)
+
+
+
+@public_router.get(
+    "/audio",
+    response_model=List[EntregaPublicaOut],
+    summary="Lista las entregas de audio (canal 5) de esta campaña, con plantilla",
+)
+async def list_entregas_audio_campana(
+    campana_id: UUID,
+    db: Session = Depends(get_db),
+):
+
+    campana = get_campana(db, campana_id)
+    if not campana or campana.canal_id != 5:
+        raise HTTPException(
+            status_code=400,
+            detail="La campaña indicada no es de canal 5 (audio grabado)"
+        )
+
+    entregas = (
+        db.query(EntregaEncuesta)
+        .filter(EntregaEncuesta.campana_id == campana_id)
+        .filter(EntregaEncuesta.estado_id != ESTADO_RESPONDIDO) 
+        .options(
+            joinedload(EntregaEncuesta.campana)
+            .joinedload(CampanaEncuesta.plantilla)
+            .joinedload(PlantillaEncuesta.preguntas)
+            .joinedload(PreguntaEncuesta.opciones),
+            joinedload(EntregaEncuesta.destinatario),
+        )
+        .all()
+    )
+
+    # Adaptamos a EntregaPublicaOut
+    return [
+        {
+            "id":           e.id,
+            "plantilla":    e.campana.plantilla,
+        }
+        for e in entregas
+    ]
