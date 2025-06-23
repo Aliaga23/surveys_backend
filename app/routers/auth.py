@@ -25,6 +25,7 @@ from uuid import UUID
 
 from app.services.email_service import enviar_email_recuperacion_contrasena, enviar_email_verificacion
 import secrets, jwt
+from typing import List
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -88,7 +89,7 @@ def register_suscriptor(
     response_model=CuentaUsuarioOut,
     status_code=status.HTTP_201_CREATED
 )
-def register_usuario(
+async def register_usuario(
     payload: CuentaUsuarioCreate,
     db: Session = Depends(get_db)
 ):
@@ -97,10 +98,12 @@ def register_usuario(
         email=payload.email
     ).first()
     if exists:
-        raise HTTPException(status_code=400, detail="El email ya estÃƒÂ¡ registrado para este suscriptor")
+        raise HTTPException(status_code=400, detail="El email ya está registrado para este suscriptor")
+
     rol_operator = db.query(Rol).filter_by(nombre="operator").first()
     if not rol_operator:
         raise HTTPException(status_code=500, detail="Rol 'operator' no configurado")
+
     hashed = hash_password(payload.password)
     user = CuentaUsuario(
         suscriptor_id=payload.suscriptor_id,
@@ -112,6 +115,26 @@ def register_usuario(
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    #  Enviar correo para que cambie la contraseña
+    reset_token = secrets.token_urlsafe(32)
+    token_data = {
+        "sub": payload.email,
+        "reset_token": reset_token,
+        "exp": datetime.utcnow() + timedelta(hours=1)
+    }
+    token = jwt.encode(token_data, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+
+    enviado = await enviar_email_recuperacion_contrasena(
+        destinatario_email=payload.email,
+        destinatario_nombre=payload.nombre_completo,
+        url_reset=reset_link
+    )
+
+    if not enviado:
+        raise HTTPException(status_code=500, detail="Usuario creado, pero no se pudo enviar el correo de recuperación")
+
     return user
 
 
@@ -442,3 +465,34 @@ def update_suscriptor_profile(
         rol=rol.nombre,
         creado_en=suscriptor.creado_en
     )
+
+@router.get(
+    "/operadores/{suscriptor_id}",
+    response_model=List[OperatorProfileOut],
+    status_code=status.HTTP_200_OK
+)
+def listar_operadores_de_suscriptor(
+    suscriptor_id: UUID,
+    db: Session = Depends(get_db),
+    token_data: TokenData = Depends(get_current_user),
+):
+    # Solo el propio suscriptor o un admin puede ver los operadores
+    if token_data.role not in ("empresa", "admin"):
+        raise HTTPException(status_code=403, detail="No autorizado")
+    if token_data.role == "empresa" and token_data.sub != str(suscriptor_id):
+        raise HTTPException(status_code=403, detail="No puedes ver operadores de otro suscriptor")
+
+    operadores = db.query(CuentaUsuario).filter_by(suscriptor_id=suscriptor_id).all()
+
+    return [
+        OperatorProfileOut(
+            id=o.id,
+            email=o.email,
+            rol=db.get(Rol, o.rol_id).nombre,
+            nombre_completo=o.nombre_completo,
+            suscriptor_id=o.suscriptor_id,
+            activo=o.activo,
+            creado_en=o.creado_en
+        )
+        for o in operadores
+    ]
