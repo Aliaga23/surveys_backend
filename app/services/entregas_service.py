@@ -351,12 +351,37 @@ def create_bulk_entregas_papel(
     cantidad: int,
 ) -> List[EntregaEncuesta]:
     entregas: list[EntregaEncuesta] = []
+    now = datetime.now()  # Obtener hora actual para todas las entregas
+    
     for _ in range(cantidad):
         e = EntregaEncuesta(
             campana_id=campana_id,
             canal_id=4,
             destinatario_id=None,
-            estado_id=ESTADO_PENDIENTE,
+            estado_id=ESTADO_ENVIADO,
+            enviado_en=now  # Añadimos la fecha de creación
+        )
+        db.add(e)
+        entregas.append(e)
+    db.commit()
+    for e in entregas:
+        db.refresh(e)
+    return entregas
+
+
+# app/services/entregas_service.py
+def create_bulk_entregas_audio(
+    db: Session, campana_id: UUID, cantidad: int
+) -> List[EntregaEncuesta]:
+    entregas = []
+    now = datetime.now()  # Obtener hora actual para todas las entregas
+    for _ in range(cantidad):
+        e = EntregaEncuesta(
+            campana_id=campana_id,
+            canal_id=5,                 # ❶ canal audio
+            destinatario_id=None,
+            estado_id=ESTADO_ENVIADO,
+            enviado_en=now
         )
         db.add(e)
         entregas.append(e)

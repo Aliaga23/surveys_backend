@@ -24,6 +24,7 @@ from app.schemas.entregas_schema import (
 )
 from app.services.campanas_service import get_campana
 from app.services.entregas_service import (
+    create_bulk_entregas_audio,
     create_entrega,
     create_bulk_entregas_papel,   # ← helper para canal 4
     get_entrega,
@@ -204,6 +205,9 @@ async def get_plantilla_mapa_publico(entrega_id: UUID, db: Session = Depends(get
     if not entrega or not entrega.campana or not entrega.campana.plantilla:
         raise HTTPException(404, "Entrega o plantilla no encontrada")
 
+    if entrega.estado_id == ESTADO_RESPONDIDO:
+        raise HTTPException(400, "Esta encuesta ya ha sido respondida")
+
     plantilla_id = entrega.campana.plantilla_id
 
     preguntas = (
@@ -269,3 +273,19 @@ async def find_entrega_endpoint(
         raise HTTPException(400, "La encuesta ya ha sido respondida")
 
     return entrega
+
+
+@router.post("/bulk-audio", response_model=List[EntregaOut])
+async def create_bulk_audio_endpoint(
+    campana_id: UUID,
+    cantidad: int = Query(..., ge=1, le=500),
+    token_data: TokenData = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    await validate_campana_access(campana_id, token_data, db)
+
+    campana = get_campana(db, campana_id)
+    if not campana or campana.canal_id != 5:
+        raise HTTPException(400, "La campaña debe ser de canal 5 (audio grabado)")
+
+    return create_bulk_entregas_audio(db, campana_id, cantidad)

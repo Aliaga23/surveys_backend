@@ -1,12 +1,3 @@
-# app/routers/pdf_router.py
-"""
-Genera formularios PDF para encuestas en papel con un diseño **compacto y formal** que cabe, en lo posible, en **una sola hoja A4**.
-
-•  GET /entregas/{entrega_id}/formulario.pdf → PDF individual con QR + preguntas/opciones
-•  GET /entregas/campanas/{campana_id}/formularios.zip → ZIP con un PDF por entrega (canal papel)
-•  GET /entregas/campanas/{campana_id}/formularios.pdf → PDF combinado con todas las encuestas
-"""
-
 from uuid import UUID
 from typing import List
 import io, zipfile, qrcode
@@ -19,6 +10,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
+from app.core.constants import ESTADO_RESPONDIDO
 from app.core.database import get_db
 from app.models.survey import EntregaEncuesta, PreguntaEncuesta
 
@@ -110,12 +102,15 @@ async def pdf_combined(campana_id: UUID, db: Session = Depends(get_db)):
     entregas = (
         db.query(EntregaEncuesta)
         .options(joinedload(EntregaEncuesta.campana))
-        .filter(EntregaEncuesta.campana_id == campana_id)
+        .filter(
+            EntregaEncuesta.campana_id == campana_id,
+            EntregaEncuesta.estado_id != ESTADO_RESPONDIDO  # Solo entregas no respondidas
+        )
         .order_by(EntregaEncuesta.id)
         .all()
     )
     if not entregas:
-        raise HTTPException(404, "Sin entregas para esta campaña")
+        raise HTTPException(404, "No hay entregas pendientes para esta campaña")
 
     plantilla_id = entregas[0].campana.plantilla_id
     preguntas = (
