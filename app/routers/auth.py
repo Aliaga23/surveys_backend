@@ -15,9 +15,9 @@ from app.models.suscriptor import Suscriptor
 from app.models.cuenta_usuario import CuentaUsuario
 
 from app.schemas.auth import (
-    AdminCreate, AdminOut, AdminProfileOut, ForgotPasswordRequest, LoginRequest, OperatorProfileOut, ResetPasswordRequest,
+    AdminCreate, AdminOut, AdminProfileOut, AdminUpdateRequest, ForgotPasswordRequest, LoginRequest, OperatorProfileOut, ResetPasswordRequest,
     SuscriptorCreate, SuscriptorOut,
-    CuentaUsuarioCreate, CuentaUsuarioOut, SuscriptorProfileOut,
+    CuentaUsuarioCreate, CuentaUsuarioOut, SuscriptorProfileOut, SuscriptorUpdateRequest,
     Token, UserProfileOut, TokenData
 )
 
@@ -385,3 +385,60 @@ def reset_password(
         raise HTTPException(status_code=400, detail="El token ha expirado")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=400, detail="Token inválido")
+
+@router.put("/update/admin", response_model=AdminProfileOut)
+def update_admin_profile(
+    payload: AdminUpdateRequest,
+    token_data: TokenData = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if token_data.role != "admin":
+        raise HTTPException(status_code=403, detail="Acceso no autorizado")
+
+    admin = db.query(Administrador).filter_by(id=token_data.sub).first()
+    if not admin:
+        raise HTTPException(status_code=404, detail="Administrador no encontrado")
+
+    admin.email = payload.email
+    db.commit()
+    db.refresh(admin)
+
+    rol = db.get(Rol, admin.rol_id)
+    return AdminProfileOut(
+        id=admin.id,
+        email=admin.email,
+        rol=rol.nombre,
+        activo=admin.activo,
+        creado_en=admin.creado_en
+    )
+
+
+@router.put("/update/suscriptor", response_model=SuscriptorProfileOut)
+def update_suscriptor_profile(
+    payload: SuscriptorUpdateRequest,
+    token_data: TokenData = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if token_data.role != "empresa":
+        raise HTTPException(status_code=403, detail="Acceso no autorizado")
+
+    suscriptor = db.query(Suscriptor).filter_by(id=token_data.sub).first()
+    if not suscriptor:
+        raise HTTPException(status_code=404, detail="Suscriptor no encontrado")
+
+    suscriptor.nombre = payload.nombre
+    suscriptor.email = payload.email
+    suscriptor.telefono = payload.telefono
+    db.commit()
+    db.refresh(suscriptor)
+
+    rol = db.get(Rol, suscriptor.rol_id)
+    return SuscriptorProfileOut(
+        id=suscriptor.id,
+        nombre=suscriptor.nombre,
+        email=suscriptor.email,
+        telefono=suscriptor.telefono,
+        estado=suscriptor.estado,
+        rol=rol.nombre,
+        creado_en=suscriptor.creado_en
+    )

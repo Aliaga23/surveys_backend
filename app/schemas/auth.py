@@ -93,5 +93,13 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+class AdminUpdateRequest(BaseModel):
+    email: EmailStr
+
+class SuscriptorUpdateRequest(BaseModel):
+    nombre: str
+    email: EmailStr
+    telefono: Optional[str] = None
     
 UserProfileOut = Union[AdminProfileOut, SuscriptorProfileOut, OperatorProfileOut]
