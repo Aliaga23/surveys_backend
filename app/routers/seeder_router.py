@@ -166,7 +166,7 @@ async def clear_test_data(
         db.query(OpcionEncuesta).delete()
         db.query(PlantillaEncuesta).delete()
         db.query(Destinatario).delete()
-        db.query(CuentaUsuario).filter(CuentaUsuario.rol_id == 3).delete()  # Solo operadores
+        db.query(CuentaUsuario).filter(CuentaUsuario.rol_id == 2).delete()  # Solo operadores
         db.query(Suscriptor).delete()
         
         db.commit()
