@@ -100,78 +100,93 @@ class DatabaseSeeder:
 
     def seed_catalogos(self):
         """Crear datos de catálogos necesarios"""
-        # Roles
-        roles = [
-            {"id": 1, "nombre": "admin"},
-            {"id": 2, "nombre": "empresa"},
-            {"id": 3, "nombre": "operator"}
-        ]
-        
-        for rol_data in roles:
-            rol = self.db.query(Rol).filter(Rol.id == rol_data["id"]).first()
-            if not rol:
-                rol = Rol(**rol_data)
-                self.db.add(rol)
-        
-        # Tipos de pregunta
-        tipos_pregunta = [
-            {"id": 1, "nombre": "texto"},
-            {"id": 2, "nombre": "numero"},
-            {"id": 3, "nombre": "opcion"},
-            {"id": 4, "nombre": "escala"}
-        ]
-        
-        for tipo_data in tipos_pregunta:
-            tipo = self.db.query(TipoPregunta).filter(TipoPregunta.id == tipo_data["id"]).first()
-            if not tipo:
-                tipo = TipoPregunta(**tipo_data)
-                self.db.add(tipo)
-        
-        # Canales
-        canales = [
-            {"id": 1, "nombre": "email"},
-            {"id": 2, "nombre": "whatsapp"},
-            {"id": 3, "nombre": "sms"},
-            {"id": 4, "nombre": "vapi"}
-        ]
-        
-        for canal_data in canales:
-            canal = self.db.query(Canal).filter(Canal.id == canal_data["id"]).first()
-            if not canal:
-                canal = Canal(**canal_data)
-                self.db.add(canal)
-        
-        # Estados de campaña
-        estados_campana = [
-            {"id": 1, "nombre": "borrador"},
-            {"id": 2, "nombre": "programada"},
-            {"id": 3, "nombre": "en_proceso"},
-            {"id": 4, "nombre": "completada"},
-            {"id": 5, "nombre": "cancelada"}
-        ]
-        
-        for estado_data in estados_campana:
-            estado = self.db.query(EstadoCampana).filter(EstadoCampana.id == estado_data["id"]).first()
-            if not estado:
-                estado = EstadoCampana(**estado_data)
-                self.db.add(estado)
-        
-        # Estados de entrega
-        estados_entrega = [
-            {"id": 1, "nombre": "pendiente"},
-            {"id": 2, "nombre": "enviada"},
-            {"id": 3, "nombre": "respondida"},
-            {"id": 4, "nombre": "fallida"},
-            {"id": 5, "nombre": "cancelada"}
-        ]
-        
-        for estado_data in estados_entrega:
-            estado = self.db.query(EstadoEntrega).filter(EstadoEntrega.id == estado_data["id"]).first()
-            if not estado:
-                estado = EstadoEntrega(**estado_data)
-                self.db.add(estado)
-        
-        self.db.commit()
+        try:
+            # Roles
+            roles = [
+                {"id": 1, "nombre": "admin"},
+                {"id": 2, "nombre": "empresa"},
+                {"id": 3, "nombre": "operator"}
+            ]
+            
+            for rol_data in roles:
+                # Verificar por ID y por nombre
+                rol = self.db.query(Rol).filter(
+                    (Rol.id == rol_data["id"]) | (Rol.nombre == rol_data["nombre"])
+                ).first()
+                if not rol:
+                    rol = Rol(**rol_data)
+                    self.db.add(rol)
+            
+            # Tipos de pregunta
+            tipos_pregunta = [
+                {"id": 1, "nombre": "texto"},
+                {"id": 2, "nombre": "numero"},
+                {"id": 3, "nombre": "opcion"},
+                {"id": 4, "nombre": "escala"}
+            ]
+            
+            for tipo_data in tipos_pregunta:
+                tipo = self.db.query(TipoPregunta).filter(
+                    (TipoPregunta.id == tipo_data["id"]) | (TipoPregunta.nombre == tipo_data["nombre"])
+                ).first()
+                if not tipo:
+                    tipo = TipoPregunta(**tipo_data)
+                    self.db.add(tipo)
+            
+            # Canales
+            canales = [
+                {"id": 1, "nombre": "email"},
+                {"id": 2, "nombre": "whatsapp"},
+                {"id": 3, "nombre": "sms"},
+                {"id": 4, "nombre": "vapi"}
+            ]
+            
+            for canal_data in canales:
+                canal = self.db.query(Canal).filter(
+                    (Canal.id == canal_data["id"]) | (Canal.nombre == canal_data["nombre"])
+                ).first()
+                if not canal:
+                    canal = Canal(**canal_data)
+                    self.db.add(canal)
+            
+            # Estados de campaña
+            estados_campana = [
+                {"id": 1, "nombre": "borrador"},
+                {"id": 2, "nombre": "programada"},
+                {"id": 3, "nombre": "en_proceso"},
+                {"id": 4, "nombre": "completada"},
+                {"id": 5, "nombre": "cancelada"}
+            ]
+            
+            for estado_data in estados_campana:
+                estado = self.db.query(EstadoCampana).filter(
+                    (EstadoCampana.id == estado_data["id"]) | (EstadoCampana.nombre == estado_data["nombre"])
+                ).first()
+                if not estado:
+                    estado = EstadoCampana(**estado_data)
+                    self.db.add(estado)
+            
+            # Estados de entrega
+            estados_entrega = [
+                {"id": 1, "nombre": "pendiente"},
+                {"id": 2, "nombre": "enviada"},
+                {"id": 3, "nombre": "respondida"},
+                {"id": 4, "nombre": "fallida"},
+                {"id": 5, "nombre": "cancelada"}
+            ]
+            
+            for estado_data in estados_entrega:
+                estado = self.db.query(EstadoEntrega).filter(
+                    (EstadoEntrega.id == estado_data["id"]) | (EstadoEntrega.nombre == estado_data["nombre"])
+                ).first()
+                if not estado:
+                    estado = EstadoEntrega(**estado_data)
+                    self.db.add(estado)
+            
+            self.db.commit()
+        except Exception as e:
+            self.db.rollback()
+            raise Exception(f"Error creando catálogos: {str(e)}")
 
     def seed_suscriptores(self, cantidad: int = 30) -> List[Suscriptor]:
         """Crear suscriptores (empresas)"""
@@ -448,6 +463,16 @@ class DatabaseSeeder:
     def run(self) -> Dict[str, Any]:
         """Ejecutar todo el proceso de seeding"""
         try:
+            # Verificar si ya se ejecutó el seeder
+            if self.verificar_seeder_ejecutado():
+                return {
+                    "mensaje": "El seeder ya fue ejecutado anteriormente",
+                    "suscriptores_existentes": self.db.query(Suscriptor).count(),
+                    "operadores_existentes": self.db.query(CuentaUsuario).filter(CuentaUsuario.rol_id == 3).count(),
+                    "plantillas_existentes": self.db.query(PlantillaEncuesta).count(),
+                    "entregas_existentes": self.db.query(EntregaEncuesta).count()
+                }
+            
             # 1. Crear catálogos
             self.seed_catalogos()
             
@@ -470,6 +495,7 @@ class DatabaseSeeder:
             entregas_respuestas = self.seed_entregas_y_respuestas(campanas, destinatarios)
             
             return {
+                "mensaje": "Seeding completado exitosamente",
                 "suscriptores_creados": len(suscriptores),
                 "operadores_creados": len(operadores),
                 "plantillas_creadas": len(plantillas),
@@ -481,7 +507,7 @@ class DatabaseSeeder:
             
         except Exception as e:
             self.db.rollback()
-            raise e 
+            raise e
 
     def seed_basico(self) -> Dict[str, Any]:
         """Crea roles, un usuario admin y un suscriptor demo"""
@@ -536,3 +562,15 @@ class DatabaseSeeder:
             "admin_email": admin_email,
             "empresa_demo_email": demo_email
         }
+
+    def verificar_seeder_ejecutado(self) -> bool:
+        """Verifica si el seeder ya fue ejecutado"""
+        try:
+            # Verificar si ya hay suscriptores creados por el seeder
+            suscriptores_count = self.db.query(Suscriptor).count()
+            operadores_count = self.db.query(CuentaUsuario).filter(CuentaUsuario.rol_id == 3).count()
+            
+            # Si hay más de 25 suscriptores y más de 100 operadores, asumimos que ya se ejecutó
+            return suscriptores_count >= 25 and operadores_count >= 100
+        except Exception:
+            return False
