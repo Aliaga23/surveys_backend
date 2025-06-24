@@ -550,7 +550,7 @@ class DatabaseSeeder:
                 email=demo_email,
                 telefono=self.fake.phone_number(),
                 password_hash=hash_password("demo123"),
-                rol_id=2,
+                rol_id=3,
                 estado="activo",
                 stripe_customer_id=f"cus_{self.fake.uuid4()[:14]}"
             )
