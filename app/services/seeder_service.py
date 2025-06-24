@@ -200,7 +200,7 @@ class DatabaseSeeder:
                 email=f"suscritor@{empresa_nombre.lower().replace(' ', '').replace('.', '').replace(',', '')}.com",
                 telefono=f"+52{random.randint(1000000000, 9999999999)}",
                 password_hash=hash_password("password123"),
-                rol_id=2,  # empresa
+                rol_id=3,  # empresa
                 estado="activo",
                 stripe_customer_id=f"cus_{self.fake.uuid4()[:14]}"
             )
@@ -222,7 +222,7 @@ class DatabaseSeeder:
                     email=f"operador{i+1}@{suscriptor.nombre.lower().replace(' ', '').replace('.', '').replace(',', '')}.com",
                     password_hash=hash_password("password123"),
                     nombre_completo=f"{self.fake.first_name()} {self.fake.last_name()}",
-                    rol_id=3,  # operator
+                    rol_id=2,  # operator
                     activo=True
                 )
                 
@@ -519,8 +519,8 @@ class DatabaseSeeder:
         # Crear roles si no existen
         roles = {
             "admin": 1,
-            "empresa": 2,
-            "operator": 3
+            "empresa": 3,
+            "operator": 2
         }
 
         for nombre, rol_id in roles.items():
