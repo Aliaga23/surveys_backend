@@ -104,8 +104,8 @@ class DatabaseSeeder:
             # Roles
             roles = [
                 {"id": 1, "nombre": "admin"},
-                {"id": 2, "nombre": "empresa"},
-                {"id": 3, "nombre": "operator"}
+                {"id": 2, "nombre": "operator"},
+                {"id": 3, "nombre": "empresa"},
             ]
             
             for rol_data in roles:
@@ -519,8 +519,8 @@ class DatabaseSeeder:
         # Crear roles si no existen
         roles = {
             "admin": 1,
-            "empresa": 3,
-            "operator": 2
+            "operator": 2,
+            "empresa": 3
         }
 
         for nombre, rol_id in roles.items():
