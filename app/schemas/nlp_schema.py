@@ -3,83 +3,95 @@ from typing import List, Dict, Optional, Any
 from uuid import UUID
 from datetime import datetime
 
+
+# ───────── Petición ──────────────────────────────────────────────────────
 class NLPAnalysisRequest(BaseModel):
-    """Parámetros para solicitar análisis NLP"""
     fecha_inicio: Optional[datetime] = None
-    fecha_fin: Optional[datetime] = None
-    campana_id: Optional[UUID] = None
-    num_topics: int = Field(default=3, ge=1, le=5)
+    fecha_fin:    Optional[datetime] = None
+    campana_id:   Optional[UUID]     = None
+    num_topics:   int = Field(default=3, ge=1, le=5)
     num_clusters: int = Field(default=3, ge=1, le=5)
 
-class SentimentAnalysis(BaseModel):
-    """Resultados de análisis de sentimiento"""
-    promedio: float
-    positivo: int
-    neutro: int
-    negativo: int
-    distribucion: Dict[str, float]
 
+# ───────── Entidades auxiliares ──────────────────────────────────────────
 class KeywordPair(BaseModel):
-    """Par palabra-valor para keywords"""
     palabra: str
-    valor: float
-
-class KeywordAnalysis(BaseModel):
-    """Resultados de análisis de palabras clave"""
-    keywords: List[KeywordPair]
-    word_cloud: Optional[str] = None  # Base64 de la imagen
+    valor:   float
 
 class TopicKeyword(BaseModel):
-    """Palabra clave con peso para un tema"""
     palabra: str
-    peso: float
+    peso:    float
+
+class TrendPoint(BaseModel):
+    fecha: datetime
+    valor: float
+
+
+# ───────── Resultados parciales ──────────────────────────────────────────
+class SentimentAnalysis(BaseModel):
+    promedio: float
+    positivo: int
+    neutro:   int
+    negativo: int
+    distribucion: Dict[str, float]          # ej. {"positivo": 32.1, ...}
+    # KPIs adicionales
+    kpis: Optional[Dict[str, Optional[float]]] = None  # {"nps": 12.5, "csat": 84.3}
+    trend: Optional[List[TrendPoint]]         = None   # rolling weekly NPS
+
+class KeywordAnalysis(BaseModel):
+    keywords:   List[KeywordPair]
+    word_cloud: Optional[str] = None           # PNG base64
 
 class TopicAnalysis(BaseModel):
-    """Tema descubierto en el análisis"""
-    id: int
+    id:             int
     palabras_clave: List[TopicKeyword]
-    peso: float
+    peso:           float
 
 class ClusterInfo(BaseModel):
-    """Información de un cluster"""
-    id: int
-    tamaño: int
-    keywords: List[tuple]
+    id:       int
+    tamaño:   int
+    keywords: List[KeywordPair]
     muestras: List[str]
 
 class ClusterAnalysis(BaseModel):
-    """Resultados de análisis de clusters"""
-    clusters: List[ClusterInfo]
+    clusters:       List[ClusterInfo]
     total_clusters: int
 
+
+# ───────── Análisis por pregunta ─────────────────────────────────────────
 class PreguntaAnalisis(BaseModel):
-    """Análisis de respuestas para una pregunta específica"""
-    pregunta_id: str
-    pregunta_texto: Optional[str] = None
+    pregunta_id:      str
+    pregunta_texto:   Optional[str] = None
     total_respuestas: int
-    tipo_pregunta: Optional[int] = None
-    sentiment: Optional[Dict[str, Any]] = None
-    keywords: Optional[Dict[str, Any]] = None
-    topics: Optional[List[Dict[str, Any]]] = None
-    estadisticas: Optional[Dict[str, Any]] = None
-    opciones: Optional[Dict[str, Any]] = None
+    tipo_pregunta:    Optional[int] = None
+    sentiment:        Optional[SentimentAnalysis] = None
+    keywords:         Optional[KeywordAnalysis]   = None
+    topics:           Optional[List[TopicAnalysis]] = None
+    estadisticas:     Optional[Dict[str, Any]]    = None
+    opciones:         Optional[Dict[str, Any]]    = None
 
+
+# ───────── Información de campaña ────────────────────────────────────────
 class CampanaInfo(BaseModel):
-    """Información básica de una campaña"""
-    id: str
-    nombre: str
-    total_respuestas: int
+    id:                str
+    nombre:            str
+    total_respuestas:  int
 
+
+# ───────── Respuesta completa ────────────────────────────────────────────
 class NLPAnalysisResponse(BaseModel):
-    """Respuesta completa del análisis NLP"""
-    suscriptor_id: str
-    fecha_analisis: datetime
-    periodo: Dict[str, Optional[datetime]]
-    total_respuestas: int
-    total_respuestas_texto: int
-    sentiment_global: Dict[str, Any]
-    keywords_global: Dict[str, Any]
-    topics: List[Dict[str, Any]]
-    clusters: Dict[str, Any]
-    analisis_por_pregunta: List[Dict[str, Any]]
-    campanas: List[Dict[str, Any]]
+    suscriptor_id:            str
+    fecha_analisis:           datetime
+    periodo:                  Dict[str, Optional[datetime]]
+    total_respuestas:         int
+    total_respuestas_texto:   int
+
+    sentiment_global: SentimentAnalysis
+    topics:           List[TopicAnalysis]
+    clusters:         ClusterAnalysis
+
+    analisis_por_pregunta: List[PreguntaAnalisis]
+    campanas:              List[CampanaInfo]
+
+    # Campo opcional con el texto generado por el LLM
+    recommendations: Optional[str] = None

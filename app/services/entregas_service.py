@@ -29,6 +29,7 @@ from app.services.email_service import enviar_email
 from app.services.shared_service import get_entrega_con_plantilla
 from app.services.vapi_service import crear_llamada_encuesta
 from app.schemas.entregas_schema import EntregaCreate, EntregaUpdate
+from app.core.celery import send_email_task
 
 logger = logging.getLogger(__name__)
 
@@ -230,14 +231,15 @@ async def create_entrega(
             if not suscriptor:
                 raise ValueError("No se encontró el suscriptor")
 
-            await enviar_email(
-                destinatario_email=entrega.destinatario.email,
-                destinatario_nombre=entrega.destinatario.nombre or "Estimado/a",
-                asunto=f"Te invitamos a responder una encuesta: {entrega.campana.nombre}",
-                nombre_campana=entrega.campana.nombre,
-                nombre_empresa=suscriptor.nombre,
-                url_encuesta=_generar_url_encuesta(entrega.id),
-            )
+            # Enviar email de forma asíncrona usando Celery
+            send_email_task.delay({
+                "destinatario_email": entrega.destinatario.email,
+                "destinatario_nombre": entrega.destinatario.nombre or "Estimado/a",
+                "asunto": f"Te invitamos a responder una encuesta: {entrega.campana.nombre}",
+                "nombre_campana": entrega.campana.nombre,
+                "nombre_empresa": suscriptor.nombre,
+                "url_encuesta": _generar_url_encuesta(entrega.id)
+            })
 
             entrega.estado_id = ESTADO_ENVIADO
             entrega.enviado_en = datetime.now()
