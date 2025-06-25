@@ -295,3 +295,42 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Error procesando evento")
 
     return {"status": "success"}
+
+
+# Dashboard de stripe
+@router.get(
+    "stripe-metrics",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(get_admin_user)]
+)
+def obtener_metricas_dashboard(db: Session = Depends(get_db)):
+    try:
+        # --- 1. Balance de Stripe ---
+        balance = stripe.Balance.retrieve()
+
+        total_disponible = sum(
+            b['amount'] for b in balance['available'] if b['currency'] == 'usd'
+        ) / 100  # Stripe usa centavos
+
+        total_pendiente = sum(
+            b['amount'] for b in balance['pending'] if b['currency'] == 'usd'
+        ) / 100
+
+        # --- 2. Conteo de suscriptores activos ---
+        suscriptores_activos = db.query(Suscriptor).filter_by(estado="activo").count()
+
+        # --- 3. Conteo de suscripciones activas (opcional) ---
+        suscripciones_activas = db.query(SuscripcionSuscriptor).filter_by(estado="activo").count()
+
+        return {
+            "balance_usd": {
+                "disponible": total_disponible,
+                "pendiente": total_pendiente
+            },
+            "suscriptores_activos": suscriptores_activos,
+            "suscripciones_activas": suscripciones_activas
+        }
+
+    except Exception as e:
+        print(f"Error al obtener métricas: {e}")
+        raise HTTPException(status_code=500, detail="No se pudieron obtener las métricas del dashboard")
