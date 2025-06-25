@@ -99,7 +99,7 @@ async def create_bulk_papel_endpoint(
 async def list_entregas_endpoint(
     campana_id: UUID,
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, le=1000),
+    limit: int = Query(800, le=1000),
     token_data: TokenData = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
