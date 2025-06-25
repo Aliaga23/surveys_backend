@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from app.core.database import get_db
 from app.schemas.auth import TokenData
 from app.models.cuenta_usuario import CuentaUsuario
+from app.models.suscriptor import Suscriptor
 
 # 1) Carga variables de entorno
 load_dotenv()
@@ -92,3 +93,17 @@ async def validate_subscriber_access(
         if user and user.suscriptor_id == suscriptor_id:
             return True
     return False
+
+
+def require_suscriptor_activo(
+    token_data: TokenData = Depends(get_empresa_user),
+    db: Session = Depends(get_db)
+) -> TokenData:
+    """Verifica que el suscriptor esté activo además de tener rol empresa"""
+    suscriptor = db.query(Suscriptor).filter_by(id=token_data.sub).first()
+    if not suscriptor or suscriptor.estado != "activo":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tu suscripción no está activa o fue cancelada."
+        )
+    return token_data

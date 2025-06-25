@@ -5,6 +5,7 @@ from uuid import UUID
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.security import require_suscriptor_activo
 from app.models.cuenta_usuario import CuentaUsuario
 from app.schemas.auth import TokenData
 from app.schemas.destinatarios_schema import (
@@ -24,7 +25,7 @@ router = APIRouter(
 @router.post("", response_model=DestinarioOut, status_code=status.HTTP_201_CREATED)
 async def create_destinatario_endpoint(
     payload: DestinarioCreate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db)
 ):
     if token_data.role not in ["empresa", "operator"]:
@@ -90,7 +91,7 @@ async def get_destinatario_endpoint(
 async def update_destinatario_endpoint(
     destinatario_id: UUID,
     payload: DestinarioUpdate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db)
 ):
     destinatario = get_destinatario(db, destinatario_id)

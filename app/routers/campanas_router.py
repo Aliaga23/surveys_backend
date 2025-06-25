@@ -5,6 +5,7 @@ from typing import List
 
 from app.core.database import get_db
 from app.core.security import get_current_user, validate_subscriber_access
+from app.core.security import require_suscriptor_activo
 from app.models.cuenta_usuario import CuentaUsuario
 from app.schemas.auth import TokenData
 from app.schemas.campanas_schema import CampanaCreate, CampanaOut, CampanaUpdate, CampanaDetailOut, CampanaFullDetailOut
@@ -22,7 +23,7 @@ router = APIRouter(
 @router.post("", response_model=CampanaOut, status_code=status.HTTP_201_CREATED)
 async def create_campana_endpoint(
     payload: CampanaCreate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db)
 ):
     if token_data.role not in ["empresa", "operator"]:
@@ -80,7 +81,7 @@ async def get_campana_endpoint(
 async def update_campana_endpoint(
     campana_id: UUID,
     payload: CampanaUpdate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db)
 ):
     campana = get_campana(db, campana_id)

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.security import get_current_user, validate_subscriber_access
+from app.core.security import require_suscriptor_activo
 from app.models.survey import CampanaEncuesta, EntregaEncuesta, PlantillaEncuesta, PreguntaEncuesta
 from app.schemas.auth import TokenData
 from app.schemas.entregas_schema import (
@@ -68,7 +69,7 @@ async def validate_campana_access(
 async def create_entrega_endpoint(
     campana_id: UUID,
     payload: EntregaCreate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db),
 ):
     await validate_campana_access(campana_id, token_data, db)
@@ -79,7 +80,7 @@ async def create_entrega_endpoint(
 async def create_bulk_papel_endpoint(
     campana_id: UUID,
     cantidad: int = Query(..., ge=1, le=500),
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db),
 ):
     """
@@ -126,7 +127,7 @@ async def update_entrega_endpoint(
     campana_id: UUID,
     entrega_id: UUID,
     payload: EntregaUpdate,
-    token_data: TokenData = Depends(get_current_user),
+    token_data: TokenData = Depends(require_suscriptor_activo),
     db: Session = Depends(get_db),
 ):
     await validate_campana_access(campana_id, token_data, db)
