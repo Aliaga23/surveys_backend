@@ -44,7 +44,7 @@ async def create_destinatario_endpoint(
 @router.get("", response_model=List[DestinarioOut])
 async def list_destinatarios_endpoint(
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, le=1000),
+    limit: int = Query(default=500, le=1000),
     token_data: TokenData = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
