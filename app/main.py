@@ -14,7 +14,7 @@ from app.routers import encuestas_router
 from app.routers import seeder_router
 from app.routers import pdf_router
 from app.routers import dashboard_router
-
+from app.routers import chat_router
 
 app = FastAPI(title="Mi API SaaS", version="0.1.0")
 
@@ -50,7 +50,7 @@ app.include_router(encuestas_router.router)
 app.include_router(pdf_router.router)
 app.include_router(seeder_router.router)
 app.include_router(dashboard_router.router)
-
+app.include_router(chat_router.router)
 
 @app.get("/", summary="Health check")
 async def health_check():

@@ -17,35 +17,38 @@ from app.services.campanas_service import get_campana_full_detail
 # ──────────────────────────   DTOs ricos   ─────────────────────────── #
 
 class ExecutiveSummary(BaseModel):
-    texto: str                                 # 2-3 párrafos
+    texto: str  # 2-3 párrafos
+
 
 class TemaClave(BaseModel):
-    tema: str                                  # “Servicio al cliente”, “Precio”, …
-    categoria: str                             # fortaleza | debilidad | oportunidad | amenaza
-    sentimiento: float                         # −100 → 100
-    evidencia: List[str]                       # citas textuales resumidas
+    tema: str                     # “Servicio al cliente”, “Precio”, …
+    categoria: str                # fortaleza | debilidad | oportunidad | amenaza
+    sentimiento: float            # −100 → 100
+    evidencia: List[str]          # citas textuales resumidas
+
 
 class AccionPrioritaria(BaseModel):
     accion: str
-    impacto: str                               # alto | medio | bajo
-    dificultad: str                            # baja | media | alta
+    impacto: str                  # alto | medio | bajo
+    dificultad: str               # baja | media | alta
+
 
 class QuestionFeedback(BaseModel):
     fortalezas: List[str] = []
     debilidades: List[str] = []
     recomendaciones: List[str] = []
 
-class QuestionMetrics(BaseModel, extra=Extra.allow):
+
+class QuestionInsight(BaseModel, extra=Extra.allow):
     question_id: str
-    chart_type: str
-    data: Dict
     feedback: QuestionFeedback
+
 
 class CampaignAnalysis(BaseModel):
     executive_summary: ExecutiveSummary
     temas_clave: List[TemaClave]
     acciones_prioritarias: List[AccionPrioritaria]
-    questions: List[QuestionMetrics]
+    questions: List[QuestionInsight]
 
 
 # ────────────────────────  Servicio principal  ──────────────────────── #
@@ -53,7 +56,8 @@ class CampaignAnalysis(BaseModel):
 class DashboardService:
     """
     Analiza encuestas de cualquier temática y genera insights
-    sustanciales más métricas por pregunta.
+    sustanciales más feedback por pregunta.
+    Al usuario no le interesan métricas ni gráficos, solo el feedback.
     """
 
     def __init__(self, openai_key: str) -> None:
@@ -72,7 +76,7 @@ class DashboardService:
     def _build_prompt(campaign_data: Dict) -> str:
         """
         Prompt que instruye a GPT para crear un insight empresarial:
-        summary, temas clave (SWOT), acciones y métricas por pregunta.
+        summary, temas clave (SWOT), acciones y feedback por pregunta.
         """
         example = {
             "executive_summary": {
@@ -98,14 +102,20 @@ class DashboardService:
                 }
             ],
             "acciones_prioritarias": [
-                {"accion": "Optimizar logística de envíos", "impacto": "alto", "dificultad": "media"},
-                {"accion": "Mantener simplicidad de la app", "impacto": "medio", "dificultad": "baja"}
+                {
+                    "accion": "Optimizar logística de envíos",
+                    "impacto": "alto",
+                    "dificultad": "media"
+                },
+                {
+                    "accion": "Mantener simplicidad de la app",
+                    "impacto": "medio",
+                    "dificultad": "baja"
+                }
             ],
             "questions": [
                 {
                     "question_id": "uuid-1",
-                    "chart_type": "bar",
-                    "data": {"Sí": 72.3, "No": 27.7},
                     "feedback": {
                         "fortalezas": ["Alta aceptación general"],
                         "debilidades": ["Segmento 55+ menos entusiasta"],
@@ -125,8 +135,9 @@ class DashboardService:
             "2. Identifica de 3 a 7 `temas_clave` y clasifícalos como "
             "fortaleza, debilidad, oportunidad o amenaza.\n"
             "3. Propón 3-5 `acciones_prioritarias` con impacto y dificultad.\n"
-            "4. En `questions` elige el chart_type más adecuado "
-            "(pie, bar, histogram, stat_summary…).\n"
+            "4. Para cada elemento de `questions`, DEBES incluir SOLO `question_id` "
+            "y `feedback` (fortalezas, debilidades, recomendaciones). "
+            "No devuelvas métricas ni gráficos.\n"
             "5. Devuelve SOLO el objeto JSON.\n\n"
             "Datos de la campaña:\n"
             f"{json.dumps(campaign_data, ensure_ascii=False)}"
@@ -188,8 +199,12 @@ class DashboardService:
                             opcion_txt = None
                             if resp_preg.opcion_id:
                                 opcion_txt = next(
-                                    (o.texto for o in preg.opciones if o.id == resp_preg.opcion_id),
-                                    None
+                                    (
+                                        o.texto
+                                        for o in preg.opciones
+                                        if o.id == resp_preg.opcion_id
+                                    ),
+                                    None,
                                 )
                             resp_list.append(
                                 {
